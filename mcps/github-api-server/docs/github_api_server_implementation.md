@@ -278,7 +278,7 @@
 ### 1. GraphQL APIの型定義
 - `convertProjectV2DraftIssueItemToIssue` のレスポンスの型定義が複雑で、何度も修正が必要でした。
 - `projectItem` フィールドが存在しない、`contentId` が存在しないなど、GraphQLのスキーマと型定義のずれが原因でした。
-- https://docs.github.com/ja/graphql/reference/mutationsにGraphQLの仕様が書かれているので参照するとよい
+- [公式ドキュメント](https://docs.github.com/ja/graphql/reference/mutations)にGraphQLのAPI仕様が書かれているので参照するとよい
 
 ### 2. `convert_project_item_to_issue` ツールの利用
 - すでにIssueに変換されたアイテムを再度変換しようとするとエラーが発生することがわかりました。
