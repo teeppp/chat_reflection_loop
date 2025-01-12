@@ -817,12 +817,13 @@ async function main() {
                   items(first: 20) {
                     nodes {
                       id
-                      fieldValues(first: 8) {
+                      fieldValues(first: 20) {
                         nodes {
                           ... on ProjectV2ItemFieldTextValue {
                             text
                             field {
                               ... on ProjectV2FieldCommon {
+                                id
                                 name
                               }
                             }
@@ -831,6 +832,7 @@ async function main() {
                             date
                             field {
                               ... on ProjectV2FieldCommon {
+                                id
                                 name
                               }
                             }
@@ -839,8 +841,31 @@ async function main() {
                             name
                             field {
                               ... on ProjectV2FieldCommon {
+                                id
                                 name
                               }
+                            }
+                          }
+                        }
+                      }
+                      content {
+                        ... on DraftIssue {
+                          title
+                          body
+                        }
+                        ... on Issue {
+                          title
+                          assignees(first: 10) {
+                            nodes {
+                              login
+                            }
+                          }
+                        }
+                        ... on PullRequest {
+                          title
+                          assignees(first: 10) {
+                            nodes {
+                              login
                             }
                           }
                         }
@@ -886,13 +911,15 @@ async function main() {
           };
         }
         case 'create_project_item': {
-          const { projectId, contentId, title } = args as {
+          const { projectId, contentId, title, ready } = args as {
             projectId: string;
             contentId?: string;
             title?: string;
+            ready?: string;
           };
 
-          const mutation = contentId ? `
+          // Step 1: Create the item
+          const createMutation = contentId ? `
             mutation($input: AddProjectV2ItemByIdInput!) {
               addProjectV2ItemById(input: $input) {
                 item {
@@ -910,9 +937,12 @@ async function main() {
             }
           `;
 
-          const result = await graphqlWithAuth<
-            { addProjectV2ItemById: { item: { id: string } } } | { addProjectV2DraftIssue: { projectItem: { id: string } } }
-          >(mutation, {
+          type CreateItemResult = {
+            addProjectV2ItemById?: { item: { id: string } };
+            addProjectV2DraftIssue?: { projectItem: { id: string } };
+          };
+
+          const createResult = await graphqlWithAuth<CreateItemResult>(createMutation, {
             input: contentId ? {
               projectId,
               contentId,
@@ -922,14 +952,54 @@ async function main() {
             },
           });
 
+          const itemId = createResult.addProjectV2ItemById?.item.id ?? createResult.addProjectV2DraftIssue?.projectItem.id;
+
+          if (!itemId) {
+            throw new Error('Failed to create project item');
+          }
+
+          // Step 2: Set the Ready field if provided
+          if (ready) {
+            const updateMutation = `
+              mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+                updateProjectV2ItemFieldValue(input: $input) {
+                  projectV2Item {
+                    id
+                    fieldValues(first: 8) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name
+                          field {
+                            ... on ProjectV2FieldCommon {
+                              name
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            `;
+
+            const updateResult = await graphqlWithAuth(updateMutation, {
+              input: {
+                projectId,
+                itemId,
+                fieldId: "PVTSSF_lAHOAmTSq84AvusnzgmPUnE",
+                value: {
+                  singleSelectOptionId: ready
+                }
+              },
+            });
+
+            logToFile(`Update result: ${JSON.stringify(updateResult)}`);
+          }
+
           return {
             content: [{
               type: 'text',
-              text: JSON.stringify(
-                'addProjectV2ItemById' in result ? result.addProjectV2ItemById.item : result.addProjectV2DraftIssue.projectItem,
-                null,
-                2
-              ),
+              text: JSON.stringify({ id: itemId }, null, 2),
             }],
           };
         }
