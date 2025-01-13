@@ -70,8 +70,20 @@
     - number: イシュー番号（必須）
 
 - `list_project_items`: プロジェクト内のタスク一覧取得
-  - 入力パラメータ:
-    - projectId: プロジェクトID（必須）
+   - 入力パラメータ:
+     - projectId: プロジェクトID（必須）
+
+- `update_project_v2_field`: プロジェクトフィールドの更新
+   - 入力パラメータ:
+     - fieldId: フィールドID（必須）
+     - name: 新しいフィールド名（オプション）
+     - singleSelectOptions: SINGLE_SELECT用のオプション（オプション）
+       - name: オプション名（必須）
+       - color: 色（必須）
+       - description: 説明（必須）
+   - 注意点:
+     - SINGLE_SELECTフィールドの場合、optionsを指定すると既存のオプションが上書きされる
+     - フィールドタイプは変更不可（作成時に固定）
 
 ### 3. エラーハンドリング
 - 不正なツール名のチェック
@@ -167,21 +179,50 @@
    - すべての項目が必須（1つでも欠けるとエラー）
 
 3. フィールドの型に応じたフラグメントの使用
-   ```graphql
-   ... on ProjectV2Field {
-     id
-     name
-     dataType
-   }
-   ... on ProjectV2SingleSelectField {
-     id
-     name
-     options {
-       id
-       name
-     }
-   }
-   ```
+    ```graphql
+    ... on ProjectV2Field {
+      id
+      name
+      dataType
+    }
+    ... on ProjectV2SingleSelectField {
+      id
+      name
+      options {
+        id
+        name
+      }
+    }
+    ```
+
+4. フィールド更新時の注意点
+    - UpdateProjectV2FieldInputの仕様に注意
+    ```graphql
+    mutation($input: UpdateProjectV2FieldInput!) {
+      updateProjectV2Field(input: $input) {
+        projectV2Field {
+          ... on ProjectV2Field {
+            id
+            name
+            dataType
+          }
+          ... on ProjectV2SingleSelectField {
+            id
+            name
+            options {
+              id
+              name
+            }
+          }
+        }
+      }
+    }
+    ```
+    - 必須パラメータ:
+      - fieldId: 更新対象のフィールドID
+    - オプションパラメータ:
+      - name: 新しいフィールド名
+      - singleSelectOptions: SINGLE_SELECT用の新しいオプション一覧
 
 ## デバッグ方法
 
@@ -284,3 +325,8 @@
 - すでにIssueに変換されたアイテムを再度変換しようとするとエラーが発生することがわかりました。
 - アイテムがIssueかどうかを事前に確認する必要がありました。
 
+### 3. `update_project_v2_field` の実装
+- GitHub GraphQL APIの仕様より、projectIdパラメータが不要になっていました。
+- SINGLE_SELECTフィールドのオプション更新時、既存のオプションが完全に上書きされることに注意が必要でした。
+- フィールドタイプに応じた適切なフラグメントの使用が重要でした。
+- 公式ドキュメントの仕様と実際のAPIの動作の違いを把握するのに時間がかかりました。

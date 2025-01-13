@@ -29,7 +29,41 @@ GitHub APIと対話するためのModel Context Protocolサーバーです。
   - `projectId`（プロジェクトノードID）を必須パラメータとして受け取ります。
   - `contentId`（イシューノードID）はオプションパラメータです。提供されない場合、`title`（アイテムタイトル）が必須です。
 - `convert_project_item_to_issue`: プロジェクトアイテムをイシューに変換します
-  - `projectId`（プロジェクトノードID）、`itemId`（プロジェクトアイテムノードID）、`owner`（リポジトリの所有者）、`repo`（リポジトリ名）を必須パラメータとして受け取ります。
+   - `projectId`（プロジェクトノードID）、`itemId`（プロジェクトアイテムノードID）、`owner`（リポジトリの所有者）、`repo`（リポジトリ名）を必須パラメータとして受け取ります。
+- `update_project_v2_field`: プロジェクトのフィールドを更新します
+   - `fieldId`（フィールドID）を必須パラメータとして受け取ります。
+   - `name`（新しいフィールド名）はオプションパラメータです。
+   - `singleSelectOptions`（SINGLE_SELECTフィールドのオプション）はオプションパラメータです。
+     - 各オプションは`name`（オプション名）、`color`（色）、`description`（説明）を持ちます。
+     - このパラメータを指定すると、既存のオプションが上書きされます。
+
+### 使用例
+
+```json
+// フィールド名の変更
+{
+  "fieldId": "PVTF_xxx",
+  "name": "新しい名前"
+}
+
+// SINGLE_SELECTフィールドのオプション更新
+{
+  "fieldId": "PVTSSF_xxx",
+  "name": "選択フィールド",
+  "singleSelectOptions": [
+    {
+      "name": "オプション1",
+      "color": "BLUE",
+      "description": "説明1"
+    },
+    {
+      "name": "オプション2",
+      "color": "GREEN",
+      "description": "説明2"
+    }
+  ]
+}
+```
 
 ## 開発
 

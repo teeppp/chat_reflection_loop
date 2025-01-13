@@ -16,6 +16,12 @@ if (!GITHUB_TOKEN) {
   throw new Error('GITHUB_TOKEN environment variable is required');
 }
 
+const graphqlWithAuth = graphql.defaults({
+  headers: {
+    authorization: `token ${GITHUB_TOKEN}`,
+  },
+});
+
 // ログファイルの設定
 const logDir = path.join(process.cwd(), 'logs');
 const logFile = path.join(logDir, 'mcp-server.log');
@@ -32,11 +38,175 @@ function logToFile(message: string) {
   fs.appendFileSync(logFile, logMessage);
 }
 
-const graphqlWithAuth = graphql.defaults({
-  headers: {
-    authorization: `token ${GITHUB_TOKEN}`,
-  },
-});
+/**
+ * プロジェクトフィールドを管理するクラス
+ * フィールドの取得と値の設定を担当
+ */
+class ProjectFieldManager {
+  private fields: Map<string, ProjectV2Field | ProjectV2SingleSelectField>;
+
+  constructor(fields: Array<ProjectV2Field | ProjectV2SingleSelectField>) {
+    this.fields = new Map(fields.map(field => [field.name, field]));
+  }
+
+  /**
+   * 名前でフィールドを取得
+   * @param name フィールド名
+   * @returns フィールド情報
+   */
+  getField(name: string): ProjectV2Field | ProjectV2SingleSelectField | undefined {
+    return this.fields.get(name);
+  }
+
+  /**
+   * 単一選択フィールドのオプションを取得
+   * @param fieldName フィールド名
+   * @param optionName オプション名
+   * @returns オプション情報
+   * @throws {McpError} フィールドが見つからないか、単一選択フィールドでない場合
+   */
+  getSingleSelectOption(fieldName: string, optionName: string): { id: string } | undefined {
+    const field = this.fields.get(fieldName);
+    if (!field) {
+      throw new McpError(ErrorCode.InvalidParams, `Field not found: ${fieldName}`);
+    }
+    if (!('options' in field)) {
+      throw new McpError(ErrorCode.InvalidParams, `Field ${fieldName} is not a single select field`);
+    }
+    return field.options.find(option => option.name === optionName);
+  }
+
+  /**
+   * プロジェクトフィールドマネージャーを初期化
+   * @param projectId プロジェクトID
+   * @returns 初期化されたマネージャーインスタンス
+   * @throws {McpError} プロジェクトが見つからないか、フィールドの取得に失敗した場合
+   */
+  static async initialize(projectId: string): Promise<ProjectFieldManager> {
+    const query = `
+      query($projectId: ID!) {
+        node(id: $projectId) {
+          ... on ProjectV2 {
+            fields(first: 20) {
+              nodes {
+                ... on ProjectV2Field {
+                  id
+                  name
+                  dataType
+                }
+                ... on ProjectV2SingleSelectField {
+                  id
+                  name
+                  options {
+                    id
+                    name
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    try {
+      const result = await graphqlWithAuth<{ node: { fields: { nodes: Array<ProjectV2Field | ProjectV2SingleSelectField> } } }>(query, {
+        projectId,
+      });
+
+      if (!result.node?.fields?.nodes) {
+        throw new McpError(ErrorCode.InvalidParams, `Project not found: ${projectId}`);
+      }
+
+      return new ProjectFieldManager(result.node.fields.nodes);
+    } catch (error) {
+      if (error instanceof McpError) {
+        throw error;
+      }
+      throw new McpError(ErrorCode.InternalError, `Failed to initialize project fields: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+}
+
+/**
+ * プロジェクトアイテムのフィールド値を設定
+ * @param projectId プロジェクトID
+ * @param itemId アイテムID
+ * @param fieldValue フィールド値の設定内容
+ * @throws {McpError} フィールド値の設定に失敗した場合
+ */
+async function updateProjectItemField(projectId: string, itemId: string, fieldValue: ProjectV2FieldValue): Promise<void> {
+  const updateMutation = `
+    mutation($input: UpdateProjectV2ItemFieldValueInput!) {
+      updateProjectV2ItemFieldValue(input: $input) {
+        projectV2Item {
+          id
+          fieldValues(first: 1) {
+            nodes {
+              ... on ProjectV2ItemFieldTextValue {
+                text
+                field { name }
+              }
+              ... on ProjectV2ItemFieldSingleSelectValue {
+                name
+                field { name }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  try {
+    logToFile(`Updating field value for item ${itemId} in project ${projectId}`);
+
+    // 入力値の検証
+    if (!fieldValue.fieldId) {
+      throw new McpError(ErrorCode.InvalidParams, 'Field ID is required');
+    }
+
+    if (!fieldValue.value.text && !fieldValue.value.singleSelectOptionId) {
+      throw new McpError(ErrorCode.InvalidParams, 'Either text or singleSelectOptionId must be provided');
+    }
+
+    const result = await graphqlWithAuth<{
+      updateProjectV2ItemFieldValue: {
+        projectV2Item: {
+          id: string;
+          fieldValues: {
+            nodes: Array<{
+              text?: string;
+              name?: string;
+              field: { name: string };
+            }>;
+          };
+        };
+      };
+    }>(updateMutation, {
+      input: {
+        projectId,
+        itemId,
+        fieldId: fieldValue.fieldId,
+        value: fieldValue.value
+      },
+    });
+
+    if (!result.updateProjectV2ItemFieldValue?.projectV2Item?.id) {
+      throw new McpError(ErrorCode.InternalError, 'Failed to update project item field');
+    }
+
+    const updatedField = result.updateProjectV2ItemFieldValue.projectV2Item.fieldValues.nodes[0];
+    logToFile(`Successfully updated field ${updatedField?.field.name} for item ${itemId}`);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    logToFile(`Error updating field value: ${errorMessage}`);
+    if (error instanceof McpError) {
+      throw error;
+    }
+    throw new McpError(ErrorCode.InternalError, `Failed to update field value: ${errorMessage}`);
+  }
+}
 
 interface CallToolRequest {
   params: {
@@ -99,6 +269,29 @@ interface ProjectV2SingleSelectField extends ProjectV2FieldBase {
     id: string;
     name: string;
   }>;
+}
+
+// フィールド値の型定義
+interface ProjectV2FieldValue {
+  fieldId: string;
+  value: {
+    text?: string;
+    singleSelectOptionId?: string;
+  };
+}
+
+interface UpdateProjectV2FieldResponse {
+  updateProjectV2Field: {
+    projectV2Field: {
+      id: string;
+      name: string;
+      dataType?: string;
+      options?: Array<{
+        id: string;
+        name: string;
+      }>;
+    };
+  };
 }
 
 interface CreateProjectFieldResponse {
@@ -421,6 +614,19 @@ async function main() {
                 type: 'string',
                 description: 'Item title (required if contentId is not provided)',
               },
+              body: {
+                type: 'string',
+                description: 'Item body for Draft Issue',
+              },
+              bodyField: {
+                type: 'string',
+                description: 'Set body to Description field',
+              },
+              type: {
+                type: 'string',
+                description: 'Item type (PBI, SBI, Task, Bug, Epic)',
+                enum: ['PBI', 'SBI', 'Task', 'Bug', 'Epic'],
+              },
             },
             required: ['projectId'],
           },
@@ -449,6 +655,46 @@ async function main() {
               },
             },
             required: ['projectId', 'itemId', 'owner', 'repo'],
+          },
+        },
+        {
+          name: 'update_project_v2_field',
+          description: 'Update a project field',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              fieldId: {
+                type: 'string',
+                description: 'Field ID to update',
+              },
+              name: {
+                type: 'string',
+                description: 'New field name',
+              },
+              singleSelectOptions: {
+                type: 'array',
+                description: 'Options for SINGLE_SELECT fields. If provided, will overwrite existing options.',
+                items: {
+                  type: 'object',
+                  properties: {
+                    name: {
+                      type: 'string',
+                      description: 'Option name',
+                    },
+                    color: {
+                      type: 'string',
+                      description: 'Option color (e.g., BLUE, GREEN, RED)',
+                    },
+                    description: {
+                      type: 'string',
+                      description: 'Option description',
+                    },
+                  },
+                  required: ['name', 'color', 'description'],
+                },
+              },
+            },
+            required: ['fieldId'],
           },
         },
       ],
@@ -911,98 +1157,232 @@ async function main() {
           };
         }
         case 'create_project_item': {
-          const { projectId, contentId, title, ready } = args as {
+          // 1. パラメータの型定義
+          type CreateProjectItemParams = {
             projectId: string;
             contentId?: string;
             title?: string;
+            type?: string;
             ready?: string;
+            body?: string;
+            bodyField?: string;
           };
 
-          // Step 1: Create the item
-          const createMutation = contentId ? `
-            mutation($input: AddProjectV2ItemByIdInput!) {
-              addProjectV2ItemById(input: $input) {
-                item {
-                  id
-                }
-              }
+          try {
+            // 2. パラメータのバリデーション
+            const params = args as unknown as CreateProjectItemParams;
+
+            if (!params.projectId) {
+              throw new McpError(ErrorCode.InvalidParams, 'Project ID is required');
             }
-          ` : `
-            mutation($input: AddProjectV2DraftIssueInput!) {
-              addProjectV2DraftIssue(input: $input) {
-                projectItem {
-                  id
-                }
-              }
+
+            if (!params.contentId && !params.title) {
+              throw new McpError(ErrorCode.InvalidParams, 'Either contentId or title must be provided');
             }
-          `;
 
-          type CreateItemResult = {
-            addProjectV2ItemById?: { item: { id: string } };
-            addProjectV2DraftIssue?: { projectItem: { id: string } };
-          };
+            logToFile(`Creating project item with parameters: ${JSON.stringify(params)}`);
 
-          const createResult = await graphqlWithAuth<CreateItemResult>(createMutation, {
-            input: contentId ? {
-              projectId,
-              contentId,
-            } : {
-              projectId,
-              title,
-            },
-          });
-
-          const itemId = createResult.addProjectV2ItemById?.item.id ?? createResult.addProjectV2DraftIssue?.projectItem.id;
-
-          if (!itemId) {
-            throw new Error('Failed to create project item');
-          }
-
-          // Step 2: Set the Ready field if provided
-          if (ready) {
-            const updateMutation = `
-              mutation($input: UpdateProjectV2ItemFieldValueInput!) {
-                updateProjectV2ItemFieldValue(input: $input) {
-                  projectV2Item {
+            // 3. プロジェクトアイテムの作成
+            const createMutation = params.contentId ? `
+              mutation($input: AddProjectV2ItemByIdInput!) {
+                addProjectV2ItemById(input: $input) {
+                  item {
                     id
-                    fieldValues(first: 8) {
-                      nodes {
-                        ... on ProjectV2ItemFieldSingleSelectValue {
-                          name
-                          field {
-                            ... on ProjectV2FieldCommon {
-                              name
-                            }
-                          }
-                        }
-                      }
-                    }
+                  }
+                }
+              }
+            ` : `
+              mutation($input: AddProjectV2DraftIssueInput!) {
+                addProjectV2DraftIssue(input: $input) {
+                  projectItem {
+                    id
                   }
                 }
               }
             `;
 
-            const updateResult = await graphqlWithAuth(updateMutation, {
-              input: {
-                projectId,
-                itemId,
-                fieldId: "PVTSSF_lAHOAmTSq84AvusnzgmPUnE",
-                value: {
-                  singleSelectOptionId: ready
+            type CreateItemResult = {
+              addProjectV2ItemById?: { item: { id: string } };
+              addProjectV2DraftIssue?: { projectItem: { id: string } };
+            };
+
+            const createInput = params.contentId ? {
+              projectId: params.projectId,
+              contentId: params.contentId,
+            } : {
+              projectId: params.projectId,
+              title: params.title,
+              body: params.body
+            };
+
+            const createResult = await graphqlWithAuth<CreateItemResult>(createMutation, {
+              input: createInput,
+            });
+
+            const itemId = createResult.addProjectV2ItemById?.item.id ?? createResult.addProjectV2DraftIssue?.projectItem.id;
+
+            if (!itemId) {
+              throw new McpError(ErrorCode.InternalError, 'Failed to create project item');
+            }
+
+            logToFile(`Project item created with ID: ${itemId}`);
+
+            // 4. フィールド値の設定
+            const fieldManager = await ProjectFieldManager.initialize(params.projectId);
+            logToFile('Project fields initialized successfully');
+
+            // フィールド値の設定
+            try {
+              // Ready フィールドの設定
+              if (params.ready) {
+                const readyFieldData = fieldManager.getField('Ready?') as ProjectV2SingleSelectField;
+                if (!readyFieldData) {
+                  throw new McpError(ErrorCode.InvalidParams, 'Ready? field not found in project');
                 }
+                const readyOption = fieldManager.getSingleSelectOption('Ready?', params.ready);
+                if (!readyOption) {
+                  throw new McpError(ErrorCode.InvalidParams, `Invalid Ready option: ${params.ready}`);
+                }
+                await updateProjectItemField(params.projectId, itemId, {
+                  fieldId: readyFieldData.id,
+                  value: {
+                    singleSelectOptionId: readyOption.id
+                  }
+                });
+                logToFile(`Set Ready field to: ${params.ready}`);
+              }
+
+              // Type フィールドの設定
+              if (params.type) {
+                const typeFieldData = fieldManager.getField('Type') as ProjectV2SingleSelectField;
+                if (!typeFieldData) {
+                  throw new McpError(ErrorCode.InvalidParams, 'Type field not found in project');
+                }
+                const typeOption = fieldManager.getSingleSelectOption('Type', params.type);
+                if (!typeOption) {
+                  throw new McpError(ErrorCode.InvalidParams, `Invalid Type option: ${params.type}`);
+                }
+                await updateProjectItemField(params.projectId, itemId, {
+                  fieldId: typeFieldData.id,
+                  value: {
+                    singleSelectOptionId: typeOption.id
+                  }
+                });
+                logToFile(`Set Type field to: ${params.type}`);
+              }
+
+              // Description フィールドの設定
+              if (params.body) {
+                const descriptionFieldName = params.bodyField || 'Description';
+                const descriptionFieldData = fieldManager.getField(descriptionFieldName) as ProjectV2Field;
+                if (!descriptionFieldData) {
+                  throw new McpError(ErrorCode.InvalidParams, `${descriptionFieldName} field not found in project`);
+                }
+                await updateProjectItemField(params.projectId, itemId, {
+                  fieldId: descriptionFieldData.id,
+                  value: {
+                    text: params.body
+                  }
+                });
+                logToFile(`Set ${descriptionFieldName} field with body content`);
+              }
+            } catch (error) {
+              // フィールド更新中のエラーをログに記録し、適切なエラーを投げる
+              const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+              logToFile(`Error updating fields: ${errorMessage}`);
+              if (error instanceof McpError) {
+                throw error;
+              }
+              throw new McpError(ErrorCode.InternalError, `Failed to update fields: ${errorMessage}`);
+            }
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ id: itemId }, null, 2),
+              }],
+            };
+
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            logToFile(`Error in create_project_item: ${errorMessage}`);
+            if (error instanceof McpError) {
+              throw error;
+            }
+            throw new McpError(ErrorCode.InternalError, `Failed to create project item: ${errorMessage}`);
+          }
+        }
+        case 'update_project_v2_field': {
+          const { fieldId, name, singleSelectOptions } = args as {
+            fieldId: string;
+            name?: string;
+            singleSelectOptions?: Array<{
+              name: string;
+              color: string;
+              description: string;
+            }>;
+          };
+
+          // バリデーションチェック
+          if (!fieldId) {
+            throw new McpError(ErrorCode.InvalidParams, 'Field ID is required');
+          }
+
+          logToFile(`Updating project field: ${fieldId}`);
+
+          const mutation = `
+            mutation($input: UpdateProjectV2FieldInput!) {
+              updateProjectV2Field(input: $input) {
+                projectV2Field {
+                  ... on ProjectV2Field {
+                    id
+                    name
+                    dataType
+                  }
+                  ... on ProjectV2SingleSelectField {
+                    id
+                    name
+                    options {
+                      id
+                      name
+                    }
+                  }
+                }
+              }
+            }
+          `;
+
+          try {
+            const result = await graphqlWithAuth<UpdateProjectV2FieldResponse>(mutation, {
+              input: {
+                fieldId,
+                ...(name && { name }),
+                ...(singleSelectOptions && { singleSelectOptions }),
               },
             });
 
-            logToFile(`Update result: ${JSON.stringify(updateResult)}`);
-          }
+            if (!result.updateProjectV2Field?.projectV2Field) {
+              throw new McpError(ErrorCode.InternalError, 'Failed to update project field');
+            }
 
-          return {
-            content: [{
-              type: 'text',
-              text: JSON.stringify({ id: itemId }, null, 2),
-            }],
-          };
+            logToFile(`Successfully updated field ${fieldId}`);
+
+            return {
+              content: [{
+                type: 'text',
+                text: JSON.stringify(result.updateProjectV2Field.projectV2Field, null, 2),
+              }],
+            };
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+            logToFile(`Error updating project field: ${errorMessage}`);
+            if (error instanceof McpError) {
+              throw error;
+            }
+            throw new McpError(ErrorCode.InternalError, `Failed to update project field: ${errorMessage}`);
+          }
         }
+
         case 'convert_project_item_to_issue': {
           const { projectId, itemId, owner, repo } = args as {
             projectId: string;
