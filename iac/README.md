@@ -153,3 +153,36 @@ terraform destroy -auto-approve
 - Cloud Run は環境変数 `PORT` を自動的に設定します
 - コンテナは指定されたポートでリッスンする必要があります
 - デプロイ時は必ず最新のイメージを Container Registry にプッシュしてください
+
+## Firebase Authentication と API Gateway の設定
+
+このデプロイ手順では、Firebase Authentication を使用して Cloud Run サービスへのアクセスを制限し、API Gateway を使用して認証・認可を処理します。
+
+### Firebase Authentication の設定
+
+1.  Firebase プロジェクトを作成し、Firebase Authentication を有効にします。
+2.  Terraform を使用して、Firebase Authentication の設定をデプロイします。
+    -   `google_firebase_project` リソースと `google_identity_platform_config` リソースを使用します。
+
+### API Gateway の設定
+
+1.  API Gateway の設定を Terraform に追加します。
+    -   `google_api_gateway_api`, `google_api_gateway_api_config`, `google_api_gateway_gateway` リソースを使用します。
+2.  OpenAPI 仕様 (`openapi.yaml`) を定義し、API Gateway のエンドポイントと認証設定を記述します。
+    -   `securityDefinitions` で Firebase Authentication を設定します。
+    -   `x-google-backend` で Cloud Run サービスの URL を指定します。
+
+### JWT トークンの取得
+
+1.  `scripts/get-firebase-jwt.js` を使用して、Firebase Authentication の JWT トークンを取得します。
+2.  `.env` ファイルに Firebase の認証情報を設定します。
+3.  以下のコマンドを実行して JWT トークンを取得します。
+    ```bash
+    node scripts/get-firebase-jwt.js
+    ```
+4.  取得した JWT トークンを `Authorization` ヘッダーに含めて、API Gateway にアクセスします。
+    ```bash
+    curl -H "Authorization: Bearer <JWT>" https://<API_GATEWAY_URL>
+    ```
+
+これらの設定により、Cloud Run サービスは API Gateway を経由してアクセスできるようになり、Firebase Authentication で認証されたユーザーのみがアクセスできるようになります。
