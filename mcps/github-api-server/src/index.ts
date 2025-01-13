@@ -1070,10 +1070,10 @@ async function main() {
             query($projectId: ID!) {
               node(id: $projectId) {
                 ... on ProjectV2 {
-                  items(first: 20) {
+                  items(first: 100) {
                     nodes {
                       id
-                      fieldValues(first: 20) {
+                      fieldValues(first: 100) {
                         nodes {
                           ... on ProjectV2ItemFieldTextValue {
                             text
@@ -1102,6 +1102,15 @@ async function main() {
                               }
                             }
                           }
+                          ... on ProjectV2ItemFieldNumberValue {
+                            number
+                            field {
+                              ... on ProjectV2FieldCommon {
+                                id
+                                name
+                              }
+                            }
+                          }
                         }
                       }
                       content {
@@ -1111,6 +1120,7 @@ async function main() {
                         }
                         ... on Issue {
                           title
+                          body
                           assignees(first: 10) {
                             nodes {
                               login
@@ -1119,6 +1129,7 @@ async function main() {
                         }
                         ... on PullRequest {
                           title
+                          body
                           assignees(first: 10) {
                             nodes {
                               login
@@ -1198,6 +1209,16 @@ async function main() {
                 addProjectV2ItemById(input: $input) {
                   item {
                     id
+                    content {
+                      ... on Issue {
+                        title
+                        body
+                      }
+                      ... on DraftIssue {
+                        title
+                        body
+                      }
+                    }
                   }
                 }
               }
@@ -1206,14 +1227,36 @@ async function main() {
                 addProjectV2DraftIssue(input: $input) {
                   projectItem {
                     id
+                    content {
+                      ... on DraftIssue {
+                        title
+                        body
+                      }
+                    }
                   }
                 }
               }
             `;
 
             type CreateItemResult = {
-              addProjectV2ItemById?: { item: { id: string } };
-              addProjectV2DraftIssue?: { projectItem: { id: string } };
+              addProjectV2ItemById?: {
+                item: {
+                  id: string;
+                  content?: {
+                    title?: string;
+                    body?: string;
+                  };
+                };
+              };
+              addProjectV2DraftIssue?: {
+                projectItem: {
+                  id: string;
+                  content?: {
+                    title?: string;
+                    body?: string;
+                  };
+                };
+              };
             };
 
             const createInput = params.contentId ? {
@@ -1243,55 +1286,67 @@ async function main() {
 
             // フィールド値の設定
             try {
+              const updates: Promise<void>[] = [];
+
               // Ready フィールドの設定
               if (params.ready) {
                 const readyField = fieldManager.getField('Ready?');
                 
                 if (!readyField) {
-                  throw new McpError(ErrorCode.InvalidParams, 'Ready? field not found in project');
-                }
-
-                if (!('options' in readyField)) {
-                  throw new McpError(ErrorCode.InvalidParams, 'Ready? field must be a single select field');
-                }
-
-                const readyOption = fieldManager.getSingleSelectOption('Ready?', params.ready);
-                if (!readyOption) {
-                  throw new McpError(ErrorCode.InvalidParams, `Invalid Ready option: ${params.ready}`);
-                }
-
-                await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: readyField.id,
-                  value: {
-                    singleSelectOptionId: readyOption.id
+                  logToFile('Warning: Ready? field not found in project');
+                } else if (!('options' in readyField)) {
+                  logToFile('Warning: Ready? field is not a single select field');
+                } else {
+                  const readyOption = fieldManager.getSingleSelectOption('Ready?', params.ready);
+                  if (!readyOption) {
+                    logToFile(`Warning: Invalid Ready option: ${params.ready}`);
+                  } else {
+                    updates.push(
+                      updateProjectItemField(params.projectId, itemId, {
+                        fieldId: readyField.id,
+                        value: {
+                          singleSelectOptionId: readyOption.id
+                        }
+                      })
+                    );
+                    logToFile(`Queued Ready field update to: ${params.ready}`);
                   }
-                });
-                logToFile(`Set Ready field to: ${params.ready}`);
+                }
               }
               // Type フィールドの設定
               if (params.type) {
                 const typeField = fieldManager.getField('Type');
                 
                 if (!typeField) {
-                  throw new McpError(ErrorCode.InvalidParams, 'Type field not found in project');
-                }
-
-                if (!('options' in typeField)) {
-                  throw new McpError(ErrorCode.InvalidParams, 'Type field must be a single select field');
-                }
-
-                const typeOption = fieldManager.getSingleSelectOption('Type', params.type);
-                if (!typeOption) {
-                  throw new McpError(ErrorCode.InvalidParams, `Invalid Type option: ${params.type}`);
-                }
-
-                await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: typeField.id,
-                  value: {
-                    singleSelectOptionId: typeOption.id
+                  logToFile('Warning: Type field not found in project');
+                } else if (!('options' in typeField)) {
+                  logToFile('Warning: Type field is not a single select field');
+                } else {
+                  const typeOption = fieldManager.getSingleSelectOption('Type', params.type);
+                  if (!typeOption) {
+                    logToFile(`Warning: Invalid Type option: ${params.type}`);
+                  } else {
+                    updates.push(
+                      updateProjectItemField(params.projectId, itemId, {
+                        fieldId: typeField.id,
+                        value: {
+                          singleSelectOptionId: typeOption.id
+                        }
+                      })
+                    );
+                    logToFile(`Queued Type field update to: ${params.type}`);
                   }
-                });
-                logToFile(`Set Type field to: ${params.type}`);
+                }
+              }
+
+              // すべてのフィールド更新を並列実行
+              if (updates.length > 0) {
+                try {
+                  await Promise.all(updates);
+                  logToFile('Successfully completed all field updates');
+                } catch (error) {
+                  logToFile(`Error updating fields: ${error instanceof Error ? error.message : 'Unknown error'}`);
+                }
               }
               // Description フィールドの設定
               if (params.body) {
@@ -1299,20 +1354,32 @@ async function main() {
                 const descriptionField = fieldManager.getField(descriptionFieldName);
                 
                 if (!descriptionField) {
-                  throw new McpError(ErrorCode.InvalidParams, `${descriptionFieldName} field not found in project`);
+                  logToFile(`Warning: ${descriptionFieldName} field not found in project`);
+                } else if (!('dataType' in descriptionField)) {
+                  logToFile(`Warning: ${descriptionFieldName} field is not a valid field type`);
+                } else if (descriptionField.dataType !== 'TEXT') {
+                  logToFile(`Warning: ${descriptionFieldName} field is not a TEXT field`);
+                } else {
+                  updates.push(
+                    updateProjectItemField(params.projectId, itemId, {
+                      fieldId: descriptionField.id,
+                      value: {
+                        text: params.body
+                      }
+                    })
+                  );
+                  logToFile(`Queued ${descriptionFieldName} field update with body content`);
                 }
+              }
 
-                if (!('dataType' in descriptionField) || descriptionField.dataType !== 'TEXT') {
-                  throw new McpError(ErrorCode.InvalidParams, `${descriptionFieldName} field must be a text field`);
+              // すべてのフィールド更新を並列実行
+              if (updates.length > 0) {
+                try {
+                  await Promise.all(updates);
+                  logToFile('Successfully completed all field updates');
+                } catch (error) {
+                  logToFile(`Error updating fields: ${error instanceof Error ? error.message : 'Unknown error'}`);
                 }
-
-                await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: descriptionField.id,
-                  value: {
-                    text: params.body
-                  }
-                });
-                logToFile(`Set ${descriptionFieldName} field with body content`);
               }
             } catch (error) {
               // フィールド更新中のエラーをログに記録し、適切なエラーを投げる
