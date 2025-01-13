@@ -28,6 +28,10 @@ GitHub APIと対話するためのModel Context Protocolサーバーです。
 - `create_project_item`: GitHubプロジェクトに新しいアイテムを作成します
   - `projectId`（プロジェクトノードID）を必須パラメータとして受け取ります。
   - `contentId`（イシューノードID）はオプションパラメータです。提供されない場合、`title`（アイテムタイトル）が必須です。
+  - `body`（アイテムの本文）はオプションパラメータです。
+  - `bodyField`（本文を設定するフィールド名）はオプションパラメータです。デフォルトは"Description"です。
+  - `type`（アイテムタイプ）はオプションパラメータです。
+  - `ready`（準備状態）はオプションパラメータです。
 - `convert_project_item_to_issue`: プロジェクトアイテムをイシューに変換します
    - `projectId`（プロジェクトノードID）、`itemId`（プロジェクトアイテムノードID）、`owner`（リポジトリの所有者）、`repo`（リポジトリ名）を必須パラメータとして受け取ります。
 - `update_project_v2_field`: プロジェクトのフィールドを更新します

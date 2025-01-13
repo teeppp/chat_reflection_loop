@@ -145,11 +145,21 @@ async function updateProjectItemField(projectId: string, itemId: string, fieldVa
             nodes {
               ... on ProjectV2ItemFieldTextValue {
                 text
-                field { name }
+                field {
+                  ... on ProjectV2Field {
+                    id
+                    name
+                  }
+                }
               }
               ... on ProjectV2ItemFieldSingleSelectValue {
                 name
-                field { name }
+                field {
+                  ... on ProjectV2SingleSelectField {
+                    id
+                    name
+                  }
+                }
               }
             }
           }
@@ -1235,51 +1245,69 @@ async function main() {
             try {
               // Ready フィールドの設定
               if (params.ready) {
-                const readyFieldData = fieldManager.getField('Ready?') as ProjectV2SingleSelectField;
-                if (!readyFieldData) {
+                const readyField = fieldManager.getField('Ready?');
+                
+                if (!readyField) {
                   throw new McpError(ErrorCode.InvalidParams, 'Ready? field not found in project');
                 }
+
+                if (!('options' in readyField)) {
+                  throw new McpError(ErrorCode.InvalidParams, 'Ready? field must be a single select field');
+                }
+
                 const readyOption = fieldManager.getSingleSelectOption('Ready?', params.ready);
                 if (!readyOption) {
                   throw new McpError(ErrorCode.InvalidParams, `Invalid Ready option: ${params.ready}`);
                 }
+
                 await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: readyFieldData.id,
+                  fieldId: readyField.id,
                   value: {
                     singleSelectOptionId: readyOption.id
                   }
                 });
                 logToFile(`Set Ready field to: ${params.ready}`);
               }
-
               // Type フィールドの設定
               if (params.type) {
-                const typeFieldData = fieldManager.getField('Type') as ProjectV2SingleSelectField;
-                if (!typeFieldData) {
+                const typeField = fieldManager.getField('Type');
+                
+                if (!typeField) {
                   throw new McpError(ErrorCode.InvalidParams, 'Type field not found in project');
                 }
+
+                if (!('options' in typeField)) {
+                  throw new McpError(ErrorCode.InvalidParams, 'Type field must be a single select field');
+                }
+
                 const typeOption = fieldManager.getSingleSelectOption('Type', params.type);
                 if (!typeOption) {
                   throw new McpError(ErrorCode.InvalidParams, `Invalid Type option: ${params.type}`);
                 }
+
                 await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: typeFieldData.id,
+                  fieldId: typeField.id,
                   value: {
                     singleSelectOptionId: typeOption.id
                   }
                 });
                 logToFile(`Set Type field to: ${params.type}`);
               }
-
               // Description フィールドの設定
               if (params.body) {
                 const descriptionFieldName = params.bodyField || 'Description';
-                const descriptionFieldData = fieldManager.getField(descriptionFieldName) as ProjectV2Field;
-                if (!descriptionFieldData) {
+                const descriptionField = fieldManager.getField(descriptionFieldName);
+                
+                if (!descriptionField) {
                   throw new McpError(ErrorCode.InvalidParams, `${descriptionFieldName} field not found in project`);
                 }
+
+                if (!('dataType' in descriptionField) || descriptionField.dataType !== 'TEXT') {
+                  throw new McpError(ErrorCode.InvalidParams, `${descriptionFieldName} field must be a text field`);
+                }
+
                 await updateProjectItemField(params.projectId, itemId, {
-                  fieldId: descriptionFieldData.id,
+                  fieldId: descriptionField.id,
                   value: {
                     text: params.body
                   }
