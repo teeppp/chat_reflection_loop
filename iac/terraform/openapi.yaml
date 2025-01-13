@@ -1,0 +1,35 @@
+swagger: "2.0"
+info:
+  title: Backend API
+  version: v1
+securityDefinitions:
+  firebaseAuth:
+    type: oauth2
+    flow: implicit
+    authorizationUrl: ""
+    x-google-issuer: "https://securetoken.google.com/${project_id}"
+    x-google-jwks_uri: "https://www.googleapis.com/service_accounts/v1/metadata/x509/securetoken@system.gserviceaccount.com"
+    x-google-audiences: "${project_id}"
+paths:
+  /:
+    get:
+      summary: Root endpoint
+      operationId: getRoot
+      security:
+        - firebaseAuth: []
+      x-google-backend:
+        address: "${backend_url}"
+      responses:
+        200:
+          description: Successful response
+  /health:
+    get:
+      summary: Health check endpoint
+      operationId: getHealth
+      security:
+        - firebaseAuth: []
+      x-google-backend:
+        address: "${backend_url}"
+      responses:
+        200:
+          description: Successful response

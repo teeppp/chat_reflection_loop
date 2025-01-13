@@ -13,3 +13,8 @@ variable "service_name" {
   description = "The name of the Cloud Run service"
   type        = string
 }
+
+variable "billing_account" {
+  description = "The billing account ID"
+  type        = string
+}
