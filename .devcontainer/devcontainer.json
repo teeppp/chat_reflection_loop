@@ -27,6 +27,7 @@
 		"type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
 		"type=bind,src=${localEnv:HOME}/.config,dst=/root/.config",
 		"type=bind,src=${localEnv:HOME}/.vscode-server/data/User/globalStorage,dst=/root/.vscode-server/data/User/globalStorage",
+		"type=bind,src=${localEnv:HOME}/.aws,dst=/root/.aws"
 	],
 	
 	// "postCreateCommand": "gcloud auth application-default login",
@@ -50,7 +51,8 @@
 				"donjayamanne.python-environment-manager",
 				"ms-python.python",
 				"ms-azuretools.vscode-docker",
-				"RooVeterinaryInc.roo-cline"
+				"RooVeterinaryInc.roo-cline",
+				"GoogleCloudTools.cloudcode"
 			]
 		}
 	}
