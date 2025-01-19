@@ -8,79 +8,49 @@ Google Cloud API Gateway は、Server-Sent Events (SSE) を直接サポートし
 
 SSE がサポートされていないため、代替技術として以下のものが考えられます。
 
-### Apigee
+### ~~Apigee~~ （実装困難）
 
-Apigee は、Google Cloud が提供する API 管理プラットフォームであり、より高度な機能を提供します。Apigee は、Firebase Auth による認証、Cloud IAM に委任したリソースベースの認証、およびストリーミング処理をサポートしています。
+~~Apigee は、Google Cloud が提供する API 管理プラットフォームであり、より高度な機能を提供します。~~
 
-#### Apigee と Firebase Auth の連携
+**注意: Apigeeを使用した実装は[困難である](./apigee_migration_challenges.md)ため実施しないことを決めた：**
 
-Apigee は、Firebase Auth で認証されたユーザーの ID トークンを検証し、それに基づいて Apigee のアクセストークンを発行する API プロキシを実装できます。これにより、Firebase Auth を利用した認証を Apigee で統合的に管理できます。
+### Identity-Aware Proxy (IAP)による代替案
 
-#### Apigee と Cloud IAM の連携
+Cloud Load BalancerとIdentity-Aware Proxy (IAP)を組み合わせることで、より効果的なソリューションを実現できます。
 
-Apigee は、Cloud IAM のリソースベースのアクセス制御をサポートしており、特定の Google Cloud リソースへのアクセスを IAM ポリシーに基づいて制御できます。これにより、Apigee を介した API アクセスを Cloud IAM で一元的に管理できます。
+#### IAPの特徴
 
-#### Apigee のストリーミング処理
+1. 認証・認可の機能：
+   - Google Identity Serviceとの統合
+   - OAuth 2.0認証フロー
+   - IAMポリシーベースのアクセス制御
 
-Apigee は、リクエストとレスポンスのストリーミング処理をサポートしています。ただし、ストリーミング処理には以下の制限事項があります。
+2. SSEサポート：
+   - ストリーミング通信の完全サポート
+   - ペイロードサイズの制限なし
+   - WebSocketsもサポート
 
-*   ペイロードサイズは 10MB に制限されます。
-*   ストリーミングを有効にすると、リクエストまたはレスポンスのペイロードにアクセスするポリシーはエラーを引き起こす可能性があります。
+3. セキュリティ：
+   - TCPフォワーディングの保護
+   - HTTPSトラフィックの暗号化
+   - セッション管理
 
-#### Apigee のストリーミング設定
+#### IAPとCloud Runの連携
 
-Apigee でストリーミングを有効にするには、ProxyEndpoint および TargetEndpoint の定義に以下のプロパティを追加します。
-
-```xml
-<TargetEndpoint name="default">
-  <HTTPTargetConnection>
-    <URL>http://mocktarget.apigee.net</URL>
-    <Properties>
-      <Property name="response.streaming.enabled">true</Property>
-      <Property name="request.streaming.enabled">true</Property>
-      <Property name="supports.http10">true</Property>
-      <Property name="request.retain.headers">User-Agent,Referer,Accept-Language</Property>
-      <Property name="retain.queryparams">apikey</Property>
-    </Properties>
-  </HTTPTargetConnection>
-</TargetEndpoint>
+1. アーキテクチャ構成：
+```
+Client → Cloud Load Balancer → Identity-Aware Proxy → Cloud Run
+                                     ↓
+                              Firebase Auth
+                                     ↓
+                                IAM Policies
 ```
 
-```xml
-<ProxyEndpoint name="default">
-  <HTTPProxyConnection>
-    <BasePath>/v1/weather</BasePath>
-    <Properties>
-      <Property name="allow.http10">true</Property>
-      <Property name="response.streaming.enabled">true</Property>
-      <Property name="request.streaming.enabled">true</Property>
-    </Properties>
-  </HTTPProxyConnection>
-</ProxyEndpoint>
-```
-
-### Cloud Run との連携
-
-Apigee は、Cloud Run で実行されているサービスと連携できます。Apigee を使用して、Cloud Run サービスへのリクエストをルーティングし、認証や認可などのセキュリティ機能を提供できます。
-
-#### 連携方法
-
-1.  Apigee で API プロキシを作成します。
-2.  API プロキシの TargetEndpoint で、Cloud Run サービスの URL を指定します。
-3.  必要に応じて、Firebase Auth や Cloud IAM を使用して認証を設定します。
-
-#### 設定手順
-
-具体的な設定手順は、以下のドキュメントを参照してください。
-
-*   [Connecting to cloud run from Apigee x using PSC - Google Cloud](https://cloud.google.com/blog/products/serverless/connecting-to-cloud-run-from-apigee-x-using-psc)
-
-このドキュメントでは、Private Service Connect (PSC) を使用して、Apigee から Cloud Run サービスにアクセスする方法について説明しています。PSC を使用すると、VPC ネットワークを介してプライベートにサービスに接続できます。
-
-#### 制限事項
-
-*   Cloud Run サービスの URL は、Apigee からアクセス可能である必要があります。
-*   Apigee と Cloud Run の間の通信は、HTTP または HTTPS で行われます。
+2. 主な利点：
+   - インフラ層での認証処理
+   - スケーラブルな負荷分散
+   - 堅牢なセキュリティ
+   - SSE/ストリーミングの完全サポート
 
 ### WebSocket
 
@@ -88,34 +58,58 @@ WebSocket は、双方向のストリーミング通信をサポートするプ�
 
 ## Terraform を用いた IaC
 
-Apigee, Cloud IAM, Firebase Authentication, Cloud Run の連携は、Terraform を用いて Infrastructure as Code (IaC) で構築できます。
+IAPとCloud Runの連携は、Terraform を用いて Infrastructure as Code (IaC) で構築できます。
 
 ### Terraform リソース
 
-以下の Terraform リソースを使用して、各サービスを構成できます。
+以下の Terraform リソースを使用して、各サービスを構成できます：
 
-*   `google_apigee_environment`: Apigee 環境を構成します。
-*   `google_cloud_run_service`: Cloud Run サービスを構成します。
-*   `google_cloud_run_service_iam`: Cloud Run サービスの IAM ポリシーを構成します。
-*   `google_project_iam_member`: Cloud IAM のメンバーを構成します。
+```hcl
+# Cloud Load Balancer + IAP構成
+resource "google_compute_backend_service" "default" {
+  name        = "llm-agent-backend"
+  protocol    = "HTTP"
+  timeout_sec = 30
 
-`google_cloud_run_service_iam` モジュールは、Cloud Run サービスの IAM ロールを管理するために使用されます。このモジュールを使用すると、Cloud Run サービスを呼び出すことができるユーザーを構成できます。
+  backend {
+    group = google_compute_region_network_endpoint_group.cloudrun_neg.id
+  }
 
-### Terraform コード例
+  iap {
+    oauth2_client_id     = google_iap_client.default.client_id
+    oauth2_client_secret = google_iap_client.default.secret
+  }
+}
 
-具体的な Terraform コード例は、以下のドキュメントを参照してください。
+# Cloud Run NEG (Network Endpoint Group)
+resource "google_compute_region_network_endpoint_group" "cloudrun_neg" {
+  name                  = "llm-agent-neg"
+  network_endpoint_type = "SERVERLESS"
+  region               = var.region
+  cloud_run {
+    service = google_cloud_run_service.default.name
+  }
+}
 
-*   [google_cloud_run_service_iam | Resources - Terraform Registry](https://registry.terraform.io/providers/hashicorp/google/latest/docs/resources/cloud_run_service_iam)
-*   [A complete Terraform setup of a serverless application on Google Cloud ...](https://threedots.tech/post/complete-setup-of-serverless-application/)
-
-これらのドキュメントには、Cloud Run サービスと IAM ポリシーを Terraform で構成する方法が記載されています。
+# IAMポリシー設定
+resource "google_iap_web_backend_service_iam_binding" "binding" {
+  project = var.project_id
+  web_backend_service = google_compute_backend_service.default.name
+  role    = "roles/iap.httpsResourceAccessor"
+  members = [
+    "serviceAccount:${google_service_account.service_account.email}",
+    "user:${var.allowed_users}"
+  ]
+}
+```
 
 ### ベストプラクティス
 
-*   Terraform モジュールを使用して、構成を再利用可能にします。
-*   変数を使用して、環境固有の設定を管理します。
-*   Terraform の状態をリモートで保存します。
+* Terraform モジュールを使用して、構成を再利用可能にします。
+* 変数を使用して、環境固有の設定を管理します。
+* Terraform の状態をリモートで保存します。
+* IAPの設定は環境ごとに適切に分離します。
 
 ## まとめ
 
-Google Cloud API Gateway は SSE を直接サポートしていませんが、Apigee を利用することで、Firebase Auth や Cloud IAM と連携したストリーミング処理を実現できます。また、WebSocket を利用することで、双方向のストリーミング通信を実装することも可能です。さらに、Apigee と Cloud Run の連携は、Terraform を用いて IaC で構築できます。
+Google Cloud API Gateway は SSE を直接サポートしていません。当初検討したApigeeによる実装は、ストリーミングの制限や実装の複雑さから実用的ではないことが判明しました。代替案として、Cloud Load BalancerとIAP（Identity-Aware Proxy）を組み合わせることで、より効果的なソリューションを実現できます。この方式では、SSEの完全サポート、堅牢なセキュリティ、スケーラビリティを確保しつつ、実装の複雑さを軽減できます。
