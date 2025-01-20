@@ -1,0 +1,3 @@
+# ルール
+- Dont' read .env. you must not check environment like API Key. you can just read .env.sample for environment name, not value. Or ask user to set envrionment.
+- Don't read config file. just ask to user.
