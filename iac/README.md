@@ -186,3 +186,55 @@ terraform destroy -auto-approve
     ```
 
 これらの設定により、Cloud Run サービスは API Gateway を経由してアクセスできるようになり、Firebase Authentication で認証されたユーザーのみがアクセスできるようになります。
+
+## Secret Manager の設定とAPIエンドポイントの確認
+
+今回の変更で、Secret Managerを使用してAPIキーを管理するように変更しました。
+
+### Secret Manager の設定
+1.  `terraform.tfvars` にAPIキーとトークンを設定します。
+    ```hcl
+    # API Keys and Tokens
+    openai_api_key     = "your-openai-api-key"
+    google_api_key     = "your-google-api-key"
+    anthropic_api_key  = "your-anthropic-api-key"
+    deepseek_api_key   = "your-deepseek-api-key"
+    github_token       = "your-github-token"
+    tavily_api_key     = "your-tavily-api-key"
+    ```
+2.  `terraform apply` を実行して、Secret Managerにシークレットを登録します。
+3.  Cloud Runサービスは環境変数を通してシークレットにアクセスします。
+4.  サービスアカウントには `secretmanager.secretAccessor` ロールが必要です。
+
+### APIエンドポイントの確認
+Cloud Runサービスへの直接アクセスをテストします。
+```bash
+# 認証トークンを取得
+TOKEN=$(gcloud auth print-identity-token)
+
+# ヘルスチェックエンドポイントをテスト
+curl -H "Authorization: Bearer $TOKEN" \
+  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/health
+
+# invokeエンドポイントをテスト
+curl -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}' \
+  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/baseagent/invoke
+
+# streamエンドポイントをテスト
+curl -N -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message": "hello"}' \
+  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/baseagent/stream
+```
+
+### シークレットの更新
+1.  `terraform.tfvars` の値を更新します。
+2.  `terraform apply` を実行します。
+3.  必要に応じてCloud Runサービスを強制的に再デプロイします。
+    ```bash
+    gcloud run services update backend \
+      --platform managed \
+      --region asia-northeast1 \
+      --update-labels force-update=$(date +%s)
