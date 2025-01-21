@@ -40,7 +40,8 @@ resource "google_project_service" "default" {
     "identitytoolkit.googleapis.com",
     "serviceusage.googleapis.com",
     "secretmanager.googleapis.com",
-    "run.googleapis.com"
+    "run.googleapis.com",
+    "iap.googleapis.com"
   ])
   service = each.key
   disable_on_destroy = false
@@ -203,7 +204,8 @@ resource "google_service_account" "service_account" {
 resource "google_project_iam_member" "service_account_roles" {
   for_each = toset([
     "roles/secretmanager.secretAccessor",
-    "roles/run.invoker"
+    "roles/run.invoker",
+    "roles/firebase.admin"
   ])
 
   project = "228471500239"  # シークレットが存在するプロジェクト
@@ -215,7 +217,8 @@ resource "google_project_iam_member" "service_account_roles" {
 resource "google_project_iam_member" "service_account_roles_original" {
   for_each = toset([
     "roles/secretmanager.secretAccessor",
-    "roles/run.invoker"
+    "roles/run.invoker",
+    "roles/firebase.admin"
   ])
 
   project = var.project_id
@@ -309,7 +312,6 @@ resource "google_cloud_run_service" "default" {
       timeout_seconds      = 300
       service_account_name = google_service_account.service_account.email
     }
-
   }
 
   traffic {
@@ -318,12 +320,10 @@ resource "google_cloud_run_service" "default" {
   }
 }
 
-# IAM policy to allow authenticated access
-resource "google_cloud_run_service_iam_binding" "authenticated" {
+# IAM policy to allow all access
+resource "google_cloud_run_service_iam_binding" "noauth" {
   service  = google_cloud_run_service.default.name
   location = google_cloud_run_service.default.location
   role     = "roles/run.invoker"
-  members = [
-    "serviceAccount:${google_service_account.service_account.email}"
-  ]
+  members  = ["allUsers"]
 }
