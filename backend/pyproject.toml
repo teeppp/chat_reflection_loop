@@ -5,6 +5,12 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "aiohttp>=3.11.11",
+    "duckduckgo-search>=7.1.1",
     "fastapi[standard]>=0.115.6",
-    "google-cloud-firestore>=2.19.0",
+    "jupyter>=1.1.1",
+    "pydantic-ai[examples,logfire]>=0.0.15",
+    "sse-starlette>=2.2.1",
+    "tavily-python>=0.5.0",
+    "firebase-admin>=6.3.0",
 ]

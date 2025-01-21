@@ -13,6 +13,7 @@ services:
       - default
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/firebase-credentials.json
     # tty: true
     # stdin_open: true
     command: ["uv","run","fastapi","run", "api.py", "--host", "0.0.0.0", "--port", "8080","--reload"]
@@ -23,8 +24,9 @@ services:
       context: .
       dockerfile: Dockerfile
       target: backend
-    ports:
-      - "8080:8080"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/firebase-credentials.json
     networks:
       - default
     develop:
