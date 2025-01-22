@@ -327,3 +327,35 @@ resource "google_cloud_run_service_iam_binding" "noauth" {
   role     = "roles/run.invoker"
   members  = ["allUsers"]
 }
+
+
+# Outputs
+output "project_id" {
+  value       = var.project_id
+  description = "The project ID"
+}
+
+output "region" {
+  value       = var.region
+  description = "The region where resources are deployed"
+}
+
+output "service_name" {
+  value       = var.service_name
+  description = "The name of the Cloud Run service"
+}
+
+output "service_account_email" {
+  value       = google_service_account.service_account.email
+  description = "The email of the service account"
+}
+
+output "firebase_project_id" {
+  value       = google_firebase_project.default.project
+  description = "The Firebase project ID"
+}
+
+output "cloud_run_url" {
+  value       = google_cloud_run_service.default.status[0].url
+  description = "The URL of the deployed Cloud Run service"
+}
