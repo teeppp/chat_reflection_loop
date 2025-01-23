@@ -1,0 +1,46 @@
+# Flutter/Dart関連ファイル
+.dart_tool/
+.packages
+.pub-cache/
+.pub/
+build/
+.flutter-plugins
+.flutter-plugins-dependencies
+
+# macOS
+.DS_Store
+
+# Android Studio/IntelliJ IDEA関連
+*.iml
+.idea/
+*.ipr
+*.iws
+.gradle/
+local.properties
+
+# VS Code関連
+.vscode/
+
+# iOS関連
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/.symlinks
+ios/Pods
+Podfile
+Podfile.lock
+
+# Xcode関連
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Web (Flutter web ビルド成果物)
+web/manifest.json
+web/firebase-messaging-sw.js
+web/*.dart.js
+web/*.dart.js.map
+web/*.html  # 必要に応じてビルド生成物を除外
+
+# その他
+*.log
