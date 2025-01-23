@@ -4,6 +4,7 @@ FROM python:3.12-slim as devcontainer
 # install UV
 COPY --from=ghcr.io/astral-sh/uv:0.5 /uv /uvx /bin/
 
+# Install required packages for Flutter development
 RUN apt-get update -y && apt-get install -y \
     ca-certificates \
     curl \
@@ -13,7 +14,16 @@ RUN apt-get update -y && apt-get install -y \
     zip unzip \
     sudo \
     graphviz graphviz-dev git \
-    wget
+    wget \
+    xz-utils \
+    libglu1-mesa \
+    chromium \
+    clang \
+    cmake \
+    ninja-build \
+    pkg-config \
+    libgtk-3-dev \
+    liblzma-dev
 
 # Install Docker cli
 RUN curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
@@ -45,4 +55,53 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
 RUN unzip awscliv2.zip
 RUN ./aws/install --update
 
-RUN terraform -install-autocomplete 
+RUN terraform -install-autocomplete
+
+# Install JDK and set JAVA_HOME
+ENV JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
+RUN apt-get update && apt-get install -y openjdk-17-jdk
+
+# Install Android SDK
+ENV ANDROID_SDK_ROOT=/usr/local/android-sdk
+ENV ANDROID_HOME=${ANDROID_SDK_ROOT}
+ENV PATH=${PATH}:${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin:${ANDROID_SDK_ROOT}/platform-tools
+
+RUN mkdir -p ${ANDROID_SDK_ROOT} && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-9477386_latest.zip -O android-sdk.zip && \
+    unzip -q android-sdk.zip -d ${ANDROID_SDK_ROOT}/cmdline-tools && \
+    mv ${ANDROID_SDK_ROOT}/cmdline-tools/cmdline-tools ${ANDROID_SDK_ROOT}/cmdline-tools/latest && \
+    rm android-sdk.zip
+
+# Install Android SDK components
+ENV PATH=${PATH}:${JAVA_HOME}/bin
+RUN yes | sdkmanager --licenses && \
+    sdkmanager "platform-tools" "platforms;android-33" "build-tools;33.0.0"
+
+# Install Flutter SDK
+ENV FLUTTER_HOME=/usr/local/flutter
+ENV FLUTTER_VERSION=3.19.0
+RUN git clone https://github.com/flutter/flutter.git ${FLUTTER_HOME} && \
+    cd ${FLUTTER_HOME} && \
+    git checkout ${FLUTTER_VERSION}
+
+# Add flutter to PATH
+ENV PATH="${FLUTTER_HOME}/bin:${PATH}"
+
+# Install Chrome
+RUN wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb && \
+    apt-get install -y ./google-chrome-stable_current_amd64.deb && \
+    rm google-chrome-stable_current_amd64.deb
+
+# Configure Flutter
+RUN flutter channel stable && \
+    flutter upgrade && \
+    flutter config --no-analytics && \
+    flutter config --enable-web && \
+    flutter doctor
+
+# Set display for Flutter web development
+ENV DISPLAY=:0
+ENV CHROME_EXECUTABLE=/usr/bin/google-chrome
+
+# Set the default shell to bash
+SHELL ["/bin/bash", "-c"]
