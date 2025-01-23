@@ -1,182 +1,82 @@
-# Firebase/Flutter生成AIアプリケーション アーキテクチャ設計書
-
-## 目次
-- [1. システム概要](#1-システム概要)
-- [2. セキュリティ設計](#2-セキュリティ設計)
-- [3. データモデル](#3-データモデル)
-- [4. スケーラビリティ設計](#4-スケーラビリティ設計)
-- [5. 開発フロー・環境](#5-開発フロー環境)
-- [6. 監視・ロギング](#6-監視ロギング)
-- [7. 今後の拡張性](#7-今後の拡張性)
+# Firebase/Flutter生成AIアプリケーション アーキテクチャ設計書 (MVP版)
 
 ## 1. システム概要
 
-### 1.1 アーキテクチャの全体像
+### 1.1 MVPの範囲
+- メール/パスワードによるFirebase認証
+- チャットインターフェース
+- APIを使用した基本的なチャット機能
 
+### 1.2 シンプルなアーキテクチャ
 ```mermaid
 graph TD
-    A[Flutter App] --> B[Presentation Layer]
-    A --> C[Domain Layer]
-    A --> D[Data Layer]
+    A[Flutter Web App] --> B[Firebase Auth]
+    A --> C[Chat API]
     
-    B --> B1[UI Widgets]
-    B --> B2[Riverpod Providers]
-    B --> B3[Screen States]
-    
-    C --> C1[Use Cases]
-    C --> C2[Entities]
-    C --> C3[Repository Interfaces]
-    
-    D --> D1[Repositories]
-    D --> D2[Firebase Services]
-    D --> D3[API Clients]
-    
-    E[Firebase Backend] --> F[Authentication]
-    E --> G[Database]
-    E --> H[Storage]
-    E --> I[Serverless Functions]
-    
-    F --> F1[Firebase Auth]
-    G --> G1[Cloud Firestore]
-    H --> H1[Firebase Storage]
-    I --> I1[Cloud Functions]
-    I --> I2[Cloud Run AI処理]
+    B --> D[JWT Token]
+    D --> C
 ```
 
-### 1.2 主要コンポーネント詳細
+## 2. 実装構造 (MVP)
 
-#### A. フロントエンド (Flutter)
-- **アーキテクチャパターン**: クリーンアーキテクチャ
-- **状態管理**: Riverpod 2.x
-- **依存性管理**:
-  - flutter_riverpod
-  - freezed
-  - go_router
-  - json_serializable
-
-#### B. バックエンド (Firebase)
-- **認証**: Firebase Authentication
-  - メール/パスワード認証
-  - ソーシャルログイン（Google, Apple）
-- **データベース**: Cloud Firestore
-  - NoSQLデータモデル
-  - リアルタイム同期
-- **ストレージ**: Firebase Storage
-  - メディアファイル保存
-  - 生成AI用の入力データ
-
-#### C. AI処理層 (Cloud Run + VertexAI)
-- **処理エンジン**: Cloud Run
-- **AI Model**: VertexAI
-- **スケーリング**: オートスケーリング対応
-
-## 2. セキュリティ設計
-
-### 2.1 認証・認可
-- Firebase Authentication による認証
-- Cloud Firestore のセキュリティルール
-- Cloud Storage のセキュリティルール
-
-### 2.2 データ保護
-- データの暗号化（保存時・通信時）
-- センシティブデータの分離保存
-- アクセス制御の階層化
-
-## 3. データモデル
-
-### 3.1 Core Entities
-
-```dart
-// User Entity
-class User {
-  final String id;
-  final String name;
-  final String email;
-  final List<String> generatedContent;
-}
-
-// AIGeneration Entity
-class AIGeneration {
-  final String id;
-  final String userId;
-  final String prompt;
-  final String result;
-  final DateTime createdAt;
-  final GenerationStatus status;
-}
+### 2.1 最小限のプロジェクト構造
+```
+frontend/
+  ├── lib/
+  │   ├── main.dart
+  │   ├── auth_service.dart    # Firebase認証
+  │   ├── chat_service.dart    # APIクライアント
+  │   ├── login_page.dart      # ログイン画面
+  │   └── chat_page.dart       # チャット画面
+  └── pubspec.yaml
 ```
 
-### 3.2 Firestore コレクション構造
+### 2.2 必要最小限の依存パッケージ
+- firebase_core
+- firebase_auth
+- http (APIクライアント)
+- provider (簡易な状態管理)
 
-```
-/users/{userId}
-  - personalData
-  - settings
+## 3. 機能実装 (MVP)
 
-/generations/{generationId}
-  - prompt
-  - result
-  - metadata
+### 3.1 認証機能
+- メール/パスワードログインのみ
+- JWTトークンの取得
+- 基本的なエラーハンドリング
 
-/user-generations/{userId}/generations/{generationId}
-  - quick access link
-```
+### 3.2 チャット機能
+- シンプルなチャットUI
+- テキストメッセージの送受信
+- 基本的なローディング表示
 
-## 4. スケーラビリティ設計
+## 4. 実装ステップ
 
-### 4.1 パフォーマンス最適化
-- Firestore インデックス最適化
-- 画像の最適化とキャッシング
-- ページネーションの実装
+### Phase 1: 基本セットアップ (1-2日)
+1. Flutter Webプロジェクト作成
+2. 必要な依存関係の追加
+3. Firebase設定
 
-### 4.2 コスト最適化
-- Cloud Run のコールドスタート対策
-- Firestoreクエリの最適化
-- キャッシュ戦略の実装
+### Phase 2: 認証実装 (1-2日)
+1. ログイン画面の作成
+2. Firebase認証の実装
+3. JWTトークン取得
 
-## 5. 開発フロー・環境
+### Phase 3: チャット実装 (2-3日)
+1. チャット画面の作成
+2. APIクライアントの実装
+3. メッセージ送受信機能
 
-### 5.1 環境構成
+## 5. 簡易セキュリティ対策
+- JWTトークンのメモリ保持
+- 基本的な入力値チェック
 
-```
-- Development
-  - Firebase Emulator
-  - ローカルAI開発環境
+## 6. 開発環境
+- ローカル開発環境
+- Firebase Emulator (オプション)
 
-- Staging
-  - Firebase Project (Staging)
-  - 検証用AI環境
-
-- Production
-  - Firebase Project (Production)
-  - 本番AI環境
-```
-
-### 5.2 CI/CD
-- GitHub Actions による自動化
-- Firebase App Distribution
-- 自動テスト実行
-
-## 6. 監視・ロギング
-
-### 6.1 監視項目
-- Firebase Performance Monitoring
-- Cloud Run メトリクス
-- エラーレポート
-
-### 6.2 ロギング
-- Firebase Analytics
-- Cloud Logging
-- カスタムメトリクス
-
-## 7. 今後の拡張性
-
-### 7.1 スケールアップ対応
-- マルチモデル対応
-- バッチ処理対応
-- WebSocket対応
-
-### 7.2 機能拡張性
-- オフライン対応
-- プッシュ通知
-- バックグラウンド処理
+## 7. 将来の拡張性
+- ソーシャルログイン追加
+- メッセージ履歴保存
+- UI/UXの改善
+- エラーハンドリングの強化
+- テストの追加
