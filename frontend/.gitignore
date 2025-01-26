@@ -1,46 +1,66 @@
-# Flutter/Dart関連ファイル
-.dart_tool/
-.packages
-.pub-cache/
-.pub/
-build/
-.flutter-plugins
-.flutter-plugins-dependencies
-
-# macOS
+# Miscellaneous
+*.class
+*.log
+*.pyc
+*.swp
 .DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
 
-# Android Studio/IntelliJ IDEA関連
+# IDE関連
 *.iml
-.idea/
 *.ipr
 *.iws
+.idea/
+.vscode/
 .gradle/
 local.properties
 
-# VS Code関連
-.vscode/
+# Flutter/Dart関連
+**/.dart_tool/
+**/.packages
+**/.pub-cache/
+**/.pub/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/doc/api/
 
-# iOS関連
-ios/Flutter/Flutter.framework
-ios/Flutter/Flutter.podspec
-ios/.symlinks
-ios/Pods
+# iOS/Xcode関連
+ios/**/Flutter/Flutter.framework
+ios/**/Flutter/Flutter.podspec
+ios/**/Flutter/.last_build_id
+ios/**/.symlinks
+ios/**/Pods/
 Podfile
 Podfile.lock
-
-# Xcode関連
 *.xcworkspace
 xcuserdata/
 DerivedData/
 *.xcuserstate
 
-# Web (Flutter web ビルド成果物)
-web/manifest.json
-web/firebase-messaging-sw.js
-web/*.dart.js
-web/*.dart.js.map
-web/*.html  # 必要に応じてビルド生成物を除外
+# Android関連
+**/android/app/debug
+**/android/app/profile
+**/android/app/release
 
-# その他
-*.log
+# Web関連 (Flutter web ビルド成果物)
+**/web/*.dart.js
+**/web/*.dart.js.map
+**/web/firebase-messaging-sw.js
+
+# Symbolication関連
+app.*.symbols
+
+# Obfuscation関連
+app.*.map.json
+
+# 環境変数
+**/.env
+**/.env.*
+!**/.env.sample
