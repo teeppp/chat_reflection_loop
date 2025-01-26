@@ -18,25 +18,36 @@
 
 ## Terraform でデプロイされるリソース
 
-Terraform を使用して、以下の Google Cloud リソースがデプロイされます。
+Terraform を使用して、以下の Google Cloud リソースがデプロイされます：
 
 1.  **Cloud Run サービス (`google_cloud_run_service`)**
-    -   FastAPI アプリケーションを実行する Cloud Run サービス。
-    -   コンテナイメージ、環境変数、ポート設定などを定義します。
+    -   FastAPI アプリケーションを実行する Cloud Run サービス
+    -   コンテナイメージ、環境変数、ポート設定などを定義します
         - コンテナの並行実行数: 80
         - メモリ制限: 512Mi
-        - CPU制限: 1 core
+        - CPU制限: 1000m (1 core)
         - 最大スケール: 100インスタンス
         - タイムアウト: 300秒
 
-2.  **サービスアカウント (`google_service_account`)**
-    -   Cloud Run サービスが Google Cloud リソースにアクセスするためのサービスアカウント。
-    -   最小限の権限を持つように設定されています。
-        - サービス固有のサービスアカウントを作成
+2.  **Firebase プロジェクト**
+    -   `google_firebase_project` と `google_identity_platform_config` を設定
+    -   Email と Anonymous 認証を有効化
 
-3.  **IAM メンバー (`google_cloud_run_service_iam_member`)**
-    -   Cloud Run サービスへのアクセスを許可する IAM ポリシー。
-    -   `allUsers` に `roles/run.invoker` ロールを付与し、一般公開します。
+3.  **サービスアカウント (`google_service_account`)**
+    -   Cloud Run サービスが Google Cloud リソースにアクセスするためのサービスアカウント
+    -   以下の権限を付与：
+        - roles/secretmanager.secretAccessor
+        - roles/run.invoker
+        - roles/firebase.admin
+
+4.  **Secret Manager シークレット**
+    -   以下のAPIキーとトークンを安全に管理：
+        - OpenAI API Key
+        - Google API Key
+        - Anthropic API Key
+        - Deepseek API Key
+        - GitHub Token
+        - Tavily API Key
 
 ## デプロイ手順
 
@@ -50,8 +61,16 @@ cp iac/terraform/terraform.tfvars.example iac/terraform/terraform.tfvars
 
 2. `terraform.tfvars` を編集し、以下の値を設定します：
    - `project_id`: Google Cloud プロジェクト ID
-   - `region`: デプロイするリージョン（例：`asia-northeast1`）
+   - `region`: デプロイするリージョン（デフォルト: `asia-northeast1`）
    - `service_name`: Cloud Run サービス名
+   - `billing_account`: 課金アカウントID
+   - APIキーとトークン（シークレット値）：
+     - `openai_api_key`
+     - `google_api_key`
+     - `anthropic_api_key`
+     - `deepseek_api_key`
+     - `github_token`
+     - `tavily_api_key`
 
 ### 2. Docker イメージのビルドとプッシュ
 
@@ -111,130 +130,80 @@ terraform apply -auto-approve
 
 ## デプロイ後の確認
 
-デプロイが完了すると、以下の URL でアプリケーションにアクセスできます：
+### APIエンドポイントの確認
+
+Cloud Runサービスへのアクセスをテストします。すべてのエンドポイントにはFirebase認証が必要です：
+
+1. エンドポイントのURLを取得：
+
+```bash
+ENDPOINT=$(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')
 ```
-https://[SERVICE_NAME]-[PROJECT_NUMBER].[REGION].run.app
+
+2. Firebase認証トークン（JWT）を取得：
+
+```bash
+# scriptsディレクトリに移動
+cd scripts
+
+# 必要なパッケージをインストール
+npm install
+
+# JWTトークンを取得
+JWT=$(node get-firebase-jwt.js | grep "JWT:" | cut -d' ' -f2)
 ```
 
-## Terraform でデプロイされるリソース
+3. ヘルスチェックエンドポイントをテスト：
 
-Terraform を使用して、以下の Google Cloud リソースがデプロイされます。
+```bash
+curl -H "Authorization: Bearer $JWT" $ENDPOINT/health
+```
 
-1.  **Cloud Run サービス (`google_cloud_run_service`)**
-    -   FastAPI アプリケーションを実行する Cloud Run サービス。
-    -   コンテナイメージ、環境変数、ポート設定などを定義します。
+4. invokeエンドポイントをテスト：
 
-2.  **サービスアカウント (`google_service_account`)**
-    -   Cloud Run サービスが Google Cloud リソースにアクセスするためのサービスアカウント。
-    -   最小限の権限を持つように設定されています。
+```bash
+curl -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT" \
+  -d '{"message": "hello"}' \
+  $ENDPOINT/baseagent/invoke
+```
 
-3.  **IAM メンバー (`google_cloud_run_service_iam_member`)**
-    -   Cloud Run サービスへのアクセスを許可する IAM ポリシー。
-    -   `allUsers` に `roles/run.invoker` ロールを付与し、一般公開します。
+5. streamエンドポイントをテスト：
+
+```bash
+curl -N -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $JWT" \
+  -d '{"message": "hello"}' \
+  $ENDPOINT/baseagent/stream
+```
+
+### シークレットの更新
+
+Secret Managerのシークレットを更新する場合：
+
+1. `terraform.tfvars` の値を更新します。
+2. `terraform apply` を実行します。
+3. 必要に応じてCloud Runサービスを再デプロイします：
+   ```bash
+   gcloud run services update backend \
+     --platform managed \
+     --region asia-northeast1 \
+     --update-labels force-update=$(date +%s)
+   ```
 
 ## リソースの削除
 
-デプロイした Cloud Run サービスと関連リソースを削除するには、以下の手順を実行します。
-
-1. `iac/terraform` ディレクトリに移動します。
+デプロイした Cloud Run サービスと関連リソースを削除するには：
 
 ```bash
 cd iac/terraform
-```
-
-2. Terraform を使用してリソースを削除します。
-
-```bash
 terraform destroy -auto-approve
 ```
 
 ## 注意点
 
 - Cloud Run は環境変数 `PORT` を自動的に設定します
-- コンテナは指定されたポートでリッスンする必要があります
+- コンテナは指定されたポート（8080）でリッスンする必要があります
 - デプロイ時は必ず最新のイメージを Container Registry にプッシュしてください
-
-## Firebase Authentication と API Gateway の設定
-
-このデプロイ手順では、Firebase Authentication を使用して Cloud Run サービスへのアクセスを制限し、API Gateway を使用して認証・認可を処理します。
-
-### Firebase Authentication の設定
-
-1.  Firebase プロジェクトを作成し、Firebase Authentication を有効にします。
-2.  Terraform を使用して、Firebase Authentication の設定をデプロイします。
-    -   `google_firebase_project` リソースと `google_identity_platform_config` リソースを使用します。
-
-### API Gateway の設定
-
-1.  API Gateway の設定を Terraform に追加します。
-    -   `google_api_gateway_api`, `google_api_gateway_api_config`, `google_api_gateway_gateway` リソースを使用します。
-2.  OpenAPI 仕様 (`openapi.yaml`) を定義し、API Gateway のエンドポイントと認証設定を記述します。
-    -   `securityDefinitions` で Firebase Authentication を設定します。
-    -   `x-google-backend` で Cloud Run サービスの URL を指定します。
-
-### JWT トークンの取得
-
-1.  `scripts/get-firebase-jwt.js` を使用して、Firebase Authentication の JWT トークンを取得します。
-2.  `.env` ファイルに Firebase の認証情報を設定します。
-3.  以下のコマンドを実行して JWT トークンを取得します。
-    ```bash
-    node scripts/get-firebase-jwt.js
-    ```
-4.  取得した JWT トークンを `Authorization` ヘッダーに含めて、API Gateway にアクセスします。
-    ```bash
-    curl -H "Authorization: Bearer <JWT>" https://<API_GATEWAY_URL>
-    ```
-
-これらの設定により、Cloud Run サービスは API Gateway を経由してアクセスできるようになり、Firebase Authentication で認証されたユーザーのみがアクセスできるようになります。
-
-## Secret Manager の設定とAPIエンドポイントの確認
-
-今回の変更で、Secret Managerを使用してAPIキーを管理するように変更しました。
-
-### Secret Manager の設定
-1.  `terraform.tfvars` にAPIキーとトークンを設定します。
-    ```hcl
-    # API Keys and Tokens
-    openai_api_key     = "your-openai-api-key"
-    google_api_key     = "your-google-api-key"
-    anthropic_api_key  = "your-anthropic-api-key"
-    deepseek_api_key   = "your-deepseek-api-key"
-    github_token       = "your-github-token"
-    tavily_api_key     = "your-tavily-api-key"
-    ```
-2.  `terraform apply` を実行して、Secret Managerにシークレットを登録します。
-3.  Cloud Runサービスは環境変数を通してシークレットにアクセスします。
-4.  サービスアカウントには `secretmanager.secretAccessor` ロールが必要です。
-
-### APIエンドポイントの確認
-Cloud Runサービスへの直接アクセスをテストします。
-```bash
-# 認証トークンを取得
-TOKEN=$(gcloud auth print-identity-token)
-
-# ヘルスチェックエンドポイントをテスト
-curl -H "Authorization: Bearer $TOKEN" \
-  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/health
-
-# invokeエンドポイントをテスト
-curl -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "hello"}' \
-  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/baseagent/invoke
-
-# streamエンドポイントをテスト
-curl -N -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "hello"}' \
-  $(gcloud run services describe backend --platform managed --region asia-northeast1 --format 'value(status.url)')/baseagent/stream
-```
-
-### シークレットの更新
-1.  `terraform.tfvars` の値を更新します。
-2.  `terraform apply` を実行します。
-3.  必要に応じてCloud Runサービスを強制的に再デプロイします。
-    ```bash
-    gcloud run services update backend \
-      --platform managed \
-      --region asia-northeast1 \
-      --update-labels force-update=$(date +%s)
+- Secret Manager のシークレットは適切に管理し、定期的な更新を推奨します
+- Cloud Run サービスは一般公開（allUsers）設定になっています
