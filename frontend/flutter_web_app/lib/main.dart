@@ -3,10 +3,13 @@ import 'package:flutter/material.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/signup_screen.dart';
 import 'screens/chat_screen.dart';
+import 'screens/debug_chat_screen.dart';
+import 'services/chat_service.dart';
 
 void main() async {
   try {
@@ -19,6 +22,7 @@ void main() async {
         print('Loading environment variables...');
         await dotenv.load(fileName: ".env");
         print('Environment variables loaded successfully');
+
       } catch (e) {
         print('Error loading environment variables: $e');
         rethrow;
@@ -41,7 +45,15 @@ void main() async {
         rethrow;
       }
 
-      runApp(const MyApp());
+      final apiBaseUrl = dotenv.env['API_BASE_URL'] ?? 'http://localhost:8080';
+      final chatService = ChatService(baseUrl: apiBaseUrl);
+      
+      runApp(
+        Provider<ChatService>(
+          create: (_) => chatService,
+          child: const MyApp(),
+        ),
+      );
     }, (error, stack) {
       print('Uncaught error: $error');
       print('Stack trace: $stack');
@@ -58,6 +70,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     print('Building MyApp widget...');
+    final chatService = Provider.of<ChatService>(context);
     return MaterialApp(
       title: 'Flutter Web Demo',
       theme: ThemeData(
@@ -91,7 +104,7 @@ class MyApp extends StatelessWidget {
 
                 if (snapshot.hasData) {
                   print('User is signed in');
-                  return const ChatScreen();
+                  return ChatScreen(chatService: Provider.of<ChatService>(context));
                 }
 
                 print('User is not signed in');
@@ -100,8 +113,9 @@ class MyApp extends StatelessWidget {
             ),
         '/login': (context) => const LoginScreen(),
         '/signup': (context) => const SignUpScreen(),
-        '/home': (context) => const ChatScreen(),
+        '/home': (context) => ChatScreen(chatService: Provider.of<ChatService>(context)),
         '/debug': (context) => const HomeScreen(), // JWTトークン表示用
+        '/debug-chat': (context) => DebugChatScreen(chatService: Provider.of<ChatService>(context)), // デバッグチャット画面
       },
     );
   }

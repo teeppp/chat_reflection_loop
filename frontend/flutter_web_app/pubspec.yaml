@@ -5,8 +5,8 @@ version: 1.0.0+1
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
-
 dependencies:
+
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
@@ -23,6 +23,13 @@ dependencies:
   
   # Environment variables
   flutter_dotenv: any
+  
+  # HTTP client
+  http: ^1.1.0
+  fetch_client: ^1.0.2
+  
+  # State management
+  provider: ^6.1.0
 
 dev_dependencies:
   flutter_test:
