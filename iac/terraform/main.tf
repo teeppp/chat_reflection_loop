@@ -41,7 +41,8 @@ resource "google_project_service" "default" {
     "serviceusage.googleapis.com",
     "secretmanager.googleapis.com",
     "run.googleapis.com",
-    "iap.googleapis.com"
+    "iap.googleapis.com",
+    "aiplatform.googleapis.com"
   ])
   service = each.key
   disable_on_destroy = false
@@ -205,7 +206,8 @@ resource "google_project_iam_member" "service_account_roles" {
   for_each = toset([
     "roles/secretmanager.secretAccessor",
     "roles/run.invoker",
-    "roles/firebase.admin"
+    "roles/firebase.admin",
+    "roles/aiplatform.user"
   ])
 
   project = "228471500239"  # シークレットが存在するプロジェクト
@@ -218,7 +220,8 @@ resource "google_project_iam_member" "service_account_roles_original" {
   for_each = toset([
     "roles/secretmanager.secretAccessor",
     "roles/run.invoker",
-    "roles/firebase.admin"
+    "roles/firebase.admin",
+    "roles/aiplatform.user"
   ])
 
   project = var.project_id
