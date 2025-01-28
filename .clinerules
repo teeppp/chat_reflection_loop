@@ -1,3 +1,7 @@
 # Rules
 - Dont' read .env. you must not check environment like API Key. you can just read .env.sample for environment name, not value. Or ask user to set envrionment.
 - Don't read config file. just ask to user.
+- Task完了前に.clinerulesのユーザー指定の追加ルールに追記しなさい
+
+---
+# ユーザー指定の追加ルール
