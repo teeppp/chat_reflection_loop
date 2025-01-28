@@ -4,7 +4,6 @@ from pydantic import BaseModel
 from typing import List, Optional
 import aiohttp
 import json
-import logfire
 import os
 from duckduckgo_search import DDGS
 from dotenv import load_dotenv
@@ -15,20 +14,36 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 from pydantic_ai.models.vertexai import VertexAIModel
+import google.auth
+
+credentials, project = google.auth.default()
+print(credentials)
+print(project)
+# %%
+if __name__ == "__main__":
+    from dotenv import load_dotenv
+    import logfire
+    
+    load_dotenv()
+    logfire.configure(send_to_logfire='if-token-present')
 
 # %%
-model = VertexAIModel('gemini-2.0-flash-exp')
-# model = VertexAIModel('gemini-2.0-flash-thingking-exp-1219')
-logfire.configure(send_to_logfire='if-token-present')
+# model = VertexAIModel('gemini-2.0-flash-exp')
+model = VertexAIModel(
+    'gemini-2.0-flash-exp'
+    # 'gemini-1.5-pro-002'
+    # 'gemini-2.0-flash-thinking-exp-1219',
+    # service_account_file=os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '/app/vertex-ai-key.json')
+)
 # %%
-# agent = Agent(
-#     model,
-#     deps_type=bool,
-# )
 agent = Agent(
-    "openai:gpt-4o-mini",
+    model,
     deps_type=bool,
 )
+# agent = Agent(
+#     "openai:gpt-4o-mini",
+#     deps_type=bool,
+# )
 async def check_authorization(ctx: RunContext[bool], tool_def: ToolDefinition):
     if ctx.deps:
         return tool_def
@@ -66,11 +81,16 @@ def scrape_webpage(url: str) -> Optional[str]:
         return None
 
 @agent.tool(prepare=check_authorization)
-async def tavily_websearch(ctx: RunContext, question) -> str:
-    """Search the web for the answer to the question about technology topic."""
-    api_key = os.getenv("Tavily_API_KEY")
+async def tavily_websearch(ctx: RunContext[str]) -> str:
+    """Search the web for the answer."""
+    api_key = os.getenv("TAVILY_API_KEY")
     tavily_client = AsyncTavilyClient(api_key)
-    search_results = await tavily_client.search(query=question,include_answer=True,include_raw_content=True)
+    # print("Prompt:")
+    # print(ctx.prompt)
+    # print("Messages:")
+    # print(ctx.messages)
+    ## ユーザーの素の質問がそのままクエリに使われてしまう
+    search_results = await tavily_client.search(query=ctx.prompt,include_answer=True,include_raw_content=True)
     
     results = []
     for result in search_results['results']:
@@ -94,6 +114,6 @@ async def tavily_websearch(ctx: RunContext, question) -> str:
 if __name__ == "__main__":
     import nest_asyncio
     nest_asyncio.apply()
-    result = agent.run_sync("AIエージェントフレームワークのはやりを教えて", deps=True)
+    result = agent.run_sync("AIエージェントフレームワークのはやりを検索して", deps=True)
     print(result.data)
 # %%
