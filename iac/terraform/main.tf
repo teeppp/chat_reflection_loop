@@ -42,10 +42,24 @@ resource "google_project_service" "default" {
     "secretmanager.googleapis.com",
     "run.googleapis.com",
     "iap.googleapis.com",
-    "aiplatform.googleapis.com"
+    "aiplatform.googleapis.com",
+    "firestore.googleapis.com"
   ])
   service = each.key
   disable_on_destroy = false
+}
+
+# Firestoreデータベースの初期化
+resource "google_firestore_database" "default" {
+  provider = google-beta
+  project = var.project_id
+  name = "(default)"
+  location_id = var.region
+  type = "FIRESTORE_NATIVE"
+
+  depends_on = [
+    google_project_service.default
+  ]
 }
 
 resource "google_firebase_project" "default" {
