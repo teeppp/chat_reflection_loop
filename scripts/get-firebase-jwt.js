@@ -24,7 +24,7 @@ async function getFirebaseJWT(email, password) {
     const user = userCredential.user;
     // JWT(IDトークン)を取得
     const idToken = await user.getIdToken(true);
-    console.log("JWT:", idToken);
+    console.log(idToken);
   } catch (error) {
     console.error("Error signing in:", error);
   }
