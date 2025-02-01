@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'dart:async';
 import '../services/chat_service.dart';
+import '../models/thread.dart';
+import '../models/chat_history_entry.dart';
 import 'package:provider/provider.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -20,64 +22,144 @@ class _ChatScreenState extends State<ChatScreen> {
   final TextEditingController _messageController = TextEditingController();
   final List<ChatMessage> _messages = [];
   bool _isLoading = false;
+  bool _isLoadingHistory = false;
   StreamSubscription? _streamSubscription;
+  Thread? _currentThread;
+  List<Thread> _threads = [];
+  
+  @override
+  void initState() {
+    super.initState();
+    _loadThreads();
+  }
 
   @override
   void dispose() {
     _streamSubscription?.cancel();
+    _messageController.dispose();
     super.dispose();
+  }
+
+  // スレッド一覧を読み込む
+  Future<void> _loadThreads() async {
+    try {
+      final threads = await widget.chatService.getThreads(forceRefresh: true);
+      setState(() {
+        _threads = threads;
+        // 最新のスレッドを選択
+        if (_currentThread == null && threads.isNotEmpty) {
+          _currentThread = threads.first;
+          _loadChatHistory();
+        }
+      });
+    } catch (e) {
+      _showError('スレッド一覧の取得に失敗しました: $e');
+    }
+  }
+
+  // チャット履歴を読み込む
+  Future<void> _loadChatHistory() async {
+    if (_currentThread == null) return;
+
+    setState(() => _isLoadingHistory = true);
+    try {
+      final history = await widget.chatService.getChatHistory(_currentThread!.id);
+      setState(() {
+        _messages.clear();
+        _messages.addAll(
+          history.map((entry) => ChatMessage(
+            text: entry.message,
+            isMe: entry.isMe,
+            timestamp: entry.timestamp,
+          )).toList(),
+        );
+      });
+    } catch (e) {
+      _showError('チャット履歴の取得に失敗しました: $e');
+    } finally {
+      setState(() => _isLoadingHistory = false);
+    }
+  }
+
+  // 新しいスレッドを作成
+  Future<void> _createNewThread() async {
+    try {
+      final now = DateTime.now();
+      final thread = await widget.chatService.createThread(
+        title: '${now.year}/${now.month}/${now.day}の会話',
+      );
+      setState(() {
+        _threads = [thread, ..._threads];
+        _currentThread = thread;
+        _messages.clear();
+      });
+    } catch (e) {
+      _showError('スレッドの作成に失敗しました: $e');
+    }
+  }
+
+  // スレッドを削除
+  Future<void> _deleteThread() async {
+    if (_currentThread == null) return;
+
+    final confirmDelete = await showDialog<bool>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('スレッドを削除'),
+          content: Text('スレッド「${_currentThread!.title}」を削除しますか？'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(false),
+              child: const Text('キャンセル'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.of(context).pop(true),
+              child: const Text('削除'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmDelete == true) {
+      try {
+        await widget.chatService.deleteThread(_currentThread!.id);
+        setState(() {
+          _threads.removeWhere((thread) => thread.id == _currentThread!.id);
+          _currentThread = _threads.isNotEmpty ? _threads.first : null;
+          _messages.clear();
+        });
+      } catch (e) {
+        _showError('スレッドの削除に失敗しました: $e');
+      }
+    }
   }
 
   void _handleSubmitted(String text) async {
     if (text.trim().isEmpty) return;
     
+    // スレッドがない場合は新規作成
+    if (_currentThread == null) {
+      await _createNewThread();
+    }
+
     _messageController.clear();
-    ChatMessage message = ChatMessage(
-      text: text,
-      isMe: true,
-    );
-    setState(() {
-      _messages.insert(0, message);
-      _isLoading = true;
-    });
+    setState(() => _isLoading = true);
 
     try {
-      // ストリーミングレスポンスを受信
-      _streamSubscription?.cancel();
-      
-      // 空のボットメッセージを先に挿入
-      setState(() {
-        _messages.insert(0, ChatMessage(
-          text: '',
-          isMe: false,
-        ));
-      });
+      if (_currentThread == null) {
+        throw Exception('スレッドが選択されていません');
+      }
 
-      // ストリームを購読して逐次更新
-      final stream = widget.chatService.sendMessageStream(text);
-      _streamSubscription = stream.listen(
-        (response) {
-          print('受信したレスポンス: $response');
-          if (mounted) {
-            setState(() {
-              // 受信したレスポンスで最新のボットメッセージを更新
-              // 新しいメッセージとして直接設定
-              _messages[0] = ChatMessage(
-                text: response,
-                isMe: false,
-              );
-            });
-          }
-        },
-        onError: (error) {
-          _showError('ストリーミングエラー: $error');
-        },
-        onDone: () {
-          setState(() => _isLoading = false);
-        },
-      );
+      // メッセージを送信（バックエンドで自動的に履歴に追加される）
+      await widget.chatService.sendMessage(text, _currentThread!.id);
+      
+      // 履歴を読み込んで表示を更新
+      await _loadChatHistory();
     } catch (e) {
       _showError('エラー: $e');
+    } finally {
       setState(() => _isLoading = false);
     }
   }
@@ -85,7 +167,7 @@ class _ChatScreenState extends State<ChatScreen> {
   void _showError(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        content: Text(message),
+        content: Text('エラーが発生しました: $message'),
         backgroundColor: Colors.red,
       ),
     );
@@ -95,8 +177,38 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('チャット'),
+        title: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            DropdownButton<Thread>(
+              value: _currentThread,
+              hint: const Text('スレッドを選択'),
+              items: _threads.map((thread) {
+                return DropdownMenuItem<Thread>(
+                  value: thread,
+                  child: Text(thread.title),
+                );
+              }).toList(),
+              onChanged: (Thread? thread) {
+                setState(() {
+                  _currentThread = thread;
+                  _loadChatHistory();
+                });
+              },
+            ),
+          ],
+        ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.add),
+            tooltip: '新しい会話',
+            onPressed: _createNewThread,
+          ),
+          IconButton(
+            icon: const Icon(Icons.delete),
+            tooltip: 'スレッドを削除',
+            onPressed: _deleteThread,
+          ),
           if (kDebugMode) ...[
             IconButton(
               icon: const Icon(Icons.token),
@@ -129,11 +241,13 @@ class _ChatScreenState extends State<ChatScreen> {
         children: [
           Column(
             children: <Widget>[
+              if (_isLoadingHistory)
+                const LinearProgressIndicator(),
               Flexible(
                 child: ListView.builder(
                   padding: const EdgeInsets.all(8.0),
                   reverse: true,
-                  itemBuilder: (BuildContext context, int index) => _messages[index],
+                  itemBuilder: (_, int index) => _buildMessage(_messages[index]),
                   itemCount: _messages.length,
                 ),
               ),
@@ -154,6 +268,55 @@ class _ChatScreenState extends State<ChatScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildMessage(ChatMessage message) {
+    return Container(
+      margin: const EdgeInsets.symmetric(vertical: 10.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Container(
+            margin: const EdgeInsets.only(right: 16.0),
+            child: CircleAvatar(
+              backgroundColor: message.isMe ? Colors.blue : Colors.green,
+              child: Text(
+                message.isMe ? 'ME' : 'BOT',
+                style: const TextStyle(color: Colors.white),
+              ),
+            ),
+          ),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(
+                  message.isMe ? '自分' : 'ボット',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                Container(
+                  margin: const EdgeInsets.only(top: 5.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(message.text),
+                      Text(
+                        _formatTimestamp(message.timestamp),
+                        style: Theme.of(context).textTheme.bodySmall,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  String _formatTimestamp(DateTime timestamp) {
+    return '${timestamp.hour.toString().padLeft(2, '0')}:${timestamp.minute.toString().padLeft(2, '0')}';
   }
 
   Widget _buildTextComposer() {
@@ -187,50 +350,14 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 }
 
-class ChatMessage extends StatelessWidget {
-  const ChatMessage({
-    super.key,
-    required this.text,
-    required this.isMe,
-  });
-
+class ChatMessage {
   final String text;
   final bool isMe;
+  final DateTime timestamp;
 
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.symmetric(vertical: 10.0),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Container(
-            margin: const EdgeInsets.only(right: 16.0),
-            child: CircleAvatar(
-              backgroundColor: isMe ? Colors.blue : Colors.green,
-              child: Text(
-                isMe ? 'ME' : 'BOT',
-                style: const TextStyle(color: Colors.white),
-              ),
-            ),
-          ),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                Text(
-                  isMe ? '自分' : 'ボット',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-                Container(
-                  margin: const EdgeInsets.only(top: 5.0),
-                  child: Text(text),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+  ChatMessage({
+    required this.text,
+    required this.isMe,
+    required this.timestamp,
+  });
 }
