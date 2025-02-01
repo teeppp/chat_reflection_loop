@@ -42,6 +42,7 @@ async def verify_firebase_token(request: Request):
         raise HTTPException(status_code=401, detail="Invalid Firebase token")
 class ChatRequest(BaseModel):
     message: str
+    thread_id: Optional[str] = None
 
 class CreateChatSessionRequest(BaseModel):
     initial_message: Optional[Message] = None
@@ -98,13 +99,8 @@ async def create_chat_session(
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.put("/api/v1/chat-histories/{session_id}")
-async def add_message(
-    session_id: str,
-    message: Message,
-    token: dict = Depends(verify_firebase_token)
-):
-    user_id = token["uid"]
+async def add_message_internal(session_id: str, message: Message, user_id: str) -> bool:
+    """内部的にメッセージを追加する関数"""
     doc_ref = db.collection("chat_histories").document(session_id)
     doc = doc_ref.get()
     
@@ -120,9 +116,20 @@ async def add_message(
             "messages": firestore.ArrayUnion([message.dict()]),
             "updated_at": datetime.utcnow()
         })
-        return {"success": True}
+        return True
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/v1/chat-histories/{session_id}")
+async def add_message(
+    session_id: str,
+    message: Message,
+    token: dict = Depends(verify_firebase_token)
+):
+    """既存のメッセージ追加APIエンドポイント（後方互換性のため維持）"""
+    user_id = token["uid"]
+    success = await add_message_internal(session_id, message, user_id)
+    return {"success": success}
 
 @app.get("/api/v1/chat-histories")
 async def get_chat_histories(
@@ -169,6 +176,28 @@ async def get_chat_session(
     
     return {"history": chat_data}
 
+@app.delete("/api/v1/chat-histories/clear")
+async def clear_chat_histories(token: dict = Depends(verify_firebase_token)):
+    user_id = token["uid"]
+    try:
+        # ユーザーIDに一致するドキュメントを検索
+        query = db.collection("chat_histories").where("user_id", "==", user_id)
+        docs = list(query.stream())
+        
+        if docs:  # ドキュメントが存在する場合のみ削除を実行
+            # Firestoreのドキュメントを削除する処理を非同期で実行
+            delete_tasks = [doc.reference.delete() for doc in docs]
+            await asyncio.gather(*delete_tasks)
+        
+        # ドキュメントの有無に関わらず成功レスポンスを返す
+        return {
+            "success": True,
+            "message": "Chat histories cleared successfully",
+            "deleted_count": len(docs)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.delete("/api/v1/chat-histories/{session_id}")
 async def delete_chat_session(
     session_id: str,
@@ -213,18 +242,79 @@ async def health_check():
 
 
 
+async def manage_chat_history(
+    thread_id: Optional[str],
+    user_id: str,
+    user_message: str,
+    assistant_response: Optional[str] = None,
+    error_message: Optional[str] = None
+) -> None:
+    """チャット履歴を管理する関数"""
+    if not thread_id:
+        return
+
+    try:
+        # ユーザーメッセージを保存
+        user_msg = Message(role="user", content=user_message)
+        await add_message_internal(thread_id, user_msg, user_id)
+
+        # アシスタントの応答を保存（存在する場合）
+        if assistant_response is not None:
+            assistant_msg = Message(role="assistant", content=assistant_response)
+            await add_message_internal(thread_id, assistant_msg, user_id)
+
+        # エラーメッセージを保存（存在する場合）
+        if error_message is not None:
+            error_msg = Message(role="system", content=error_message)
+            await add_message_internal(thread_id, error_msg, user_id)
+
+    except Exception as e:
+        # 履歴保存のエラーはログに記録するが、メインの処理は継続
+        print(f"Error saving chat history: {str(e)}")
+
 @app.post("/baseagent/invoke")
 async def invoke_agent(request: ChatRequest, token = Depends(verify_firebase_token)):
-    response = await invoke_generator(web_agent, request.message)
-    content = {
-        "response": response,
-        "status": "success"
-    }
-    return Response(
-        content=json.dumps(content, ensure_ascii=False).encode('utf-8'),
-        media_type="application/json",
-        headers={"Content-Type": "application/json; charset=utf-8"}
-    )
+    user_id = token["uid"]
+    thread_id = request.thread_id
+    
+    try:
+        # Agentからの応答を取得（従来通りの実行）
+        response = await invoke_generator(web_agent, request.message)
+        
+        # セッションIDが存在する場合のみ履歴を保存
+        if thread_id:
+            try:
+                message = Message(role="user", content=request.message)
+                await add_message_internal(thread_id, message, user_id)
+                
+                assistant_message = Message(role="assistant", content=response)
+                await add_message_internal(thread_id, assistant_message, user_id)
+            except Exception as history_error:
+                print(f"Failed to save chat history: {str(history_error)}")
+                # 履歴保存の失敗は無視して処理を続行
+        
+        content = {
+            "response": response,
+            "thread_id": thread_id,
+            "status": "success"
+        }
+        return Response(
+            content=json.dumps(content, ensure_ascii=False).encode('utf-8'),
+            media_type="application/json",
+            headers={"Content-Type": "application/json; charset=utf-8"}
+        )
+    except Exception as e:
+        error_message = f"Error during agent execution: {str(e)}"
+        
+        # エラー時もセッションIDが存在する場合のみ履歴を保存
+        if thread_id:
+            try:
+                error_msg = Message(role="system", content=error_message)
+                await add_message_internal(thread_id, error_msg, user_id)
+            except Exception as history_error:
+                print(f"Failed to save error message to history: {str(history_error)}")
+        
+        raise HTTPException(status_code=500, detail=error_message)
 
 @app.post("/baseagent/stream")
 async def stream_agent(request: ChatRequest, token = Depends(verify_firebase_token)) -> EventSourceResponse:
