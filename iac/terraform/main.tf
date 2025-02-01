@@ -62,6 +62,22 @@ resource "google_firestore_database" "default" {
   ]
 }
 
+resource "google_firestore_index" "chat_histories_index" {
+  provider    = google-beta
+  project     = var.project_id
+  collection  = "chat_histories"
+  
+  fields {
+    field_path = "user_id"
+    order      = "ASCENDING"
+  }
+
+  fields {
+    field_path = "updated_at"
+    order      = "DESCENDING"
+  }
+}
+
 resource "google_firebase_project" "default" {
   provider = google-beta
   project  = var.project_id
