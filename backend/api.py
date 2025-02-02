@@ -4,6 +4,9 @@ from agents.base import agent as web_agent
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 from pydantic import BaseModel, Field
+from pydantic_ai.messages import (
+    ModelMessagesTypeAdapter,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 from datetime import datetime
@@ -22,9 +25,11 @@ class Message(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
 class ChatHistory(BaseModel):
+    """拡張されたチャット履歴モデル"""
     user_id: str
     session_id: str
-    messages: List[Message] = []
+    messages: List[Message] = []  # フロントエンド用の履歴
+    raw_messages: bytes = b''  # PydanticAI用の生の履歴(JSON文字列)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     title: Optional[str] = None
@@ -278,23 +283,55 @@ async def invoke_agent(request: ChatRequest, token = Depends(verify_firebase_tok
     thread_id = request.thread_id
     
     try:
-        # Agentからの応答を取得（従来通りの実行）
-        response = await invoke_generator(web_agent, request.message)
+        # セッションIDが存在する場合、Firestoreから履歴を取得
+        message_history = None
+        if thread_id:
+            doc = db.collection("chat_histories").document(thread_id).get()
+            if doc.exists:
+                chat_data = doc.to_dict()
+                if chat_data["user_id"] == user_id:
+                    # 生の履歴からメッセージ履歴を復元
+                    raw_messages = chat_data.get("raw_messages", "")
+                    if raw_messages:
+                        print("Debug - Retrieved raw_messages:", raw_messages)
+                        message_history = ModelMessagesTypeAdapter.validate_json(raw_messages)
+                        print("Debug - Parsed message_history:", message_history)
         
-        # セッションIDが存在する場合のみ履歴を保存
+        # レスポンスとメッセージ履歴を取得
+        response_text, all_messages_json = await invoke_generator(web_agent, request.message, message_history)
+        # メッセージ履歴をFirestoreに保存
         if thread_id:
             try:
-                message = Message(role="user", content=request.message)
-                await add_message_internal(thread_id, message, user_id)
+                # ユーザーメッセージを追加
+                user_message = Message(
+                    role="user",
+                    content=request.message,
+                    timestamp=datetime.utcnow()
+                )
                 
-                assistant_message = Message(role="assistant", content=response)
-                await add_message_internal(thread_id, assistant_message, user_id)
+                # アシスタントメッセージを追加
+                assistant_message = Message(
+                    role="assistant",
+                    content=response_text,
+                    timestamp=datetime.utcnow()
+                )
+                
+                # Firestoreを更新
+                doc_ref = db.collection("chat_histories").document(thread_id)
+                doc_ref.update({
+                    "messages": firestore.ArrayUnion([
+                        user_message.dict(),
+                        assistant_message.dict()
+                    ]),
+                    "raw_messages": all_messages_json,  # 生の履歴を保存
+                    "updated_at": datetime.utcnow()
+                })
             except Exception as history_error:
                 print(f"Failed to save chat history: {str(history_error)}")
                 # 履歴保存の失敗は無視して処理を続行
         
         content = {
-            "response": response,
+            "response": response_text,
             "thread_id": thread_id,
             "status": "success"
         }
@@ -320,23 +357,29 @@ async def invoke_agent(request: ChatRequest, token = Depends(verify_firebase_tok
 async def stream_agent(request: ChatRequest, token = Depends(verify_firebase_token)) -> EventSourceResponse:
     return EventSourceResponse(stream_generator(web_agent, request.message))
 
-async def invoke_generator(agent, message):
-    response = await agent.run(message)
-    return response.data
+async def invoke_generator(agent, message, message_history=None):
+    """非ストリーミングでの実行と履歴取得"""
+    print("Debug - message_history in invoke_generator:", message_history)
+    response = await agent.run(message, message_history=message_history, deps=True)
+    # レスポンスと新規メッセージを返す
+    return response.data, response.all_messages_json()
 
 async def stream_generator(agent, message):
-    # response = web_agent.arun(message,stream=True)
-    
-    # レスポンスを小さなチャンクに分割して送信
-        async with agent.run_stream(message) as result:
-            async for text in result.stream(debounce_by=0.01):
-                # text here is a `str` and the frontend wants
-                # JSON encoded ModelResponse, so we create one
-                data = json.dumps({"text": text}, ensure_ascii=False)
-                yield {
-                    "event": "message",
-                    "data": data
-                }
+    """ストリーミング実行と履歴取得"""
+    async with agent.run_stream(message) as result:
+        async for text in result.stream(debounce_by=0.01):
+            data = json.dumps({"text": text}, ensure_ascii=False)
+            yield {
+                "event": "message",
+                "data": data
+            }
+        
+        # ストリーミング完了後に全メッセージ履歴を送信
+        all_messages = result.all_all_messages()
+        yield {
+            "event": "history",
+            "data": all_messages
+        }
 
 if __name__ == "__main__":
     import uvicorn
