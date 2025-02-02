@@ -1,6 +1,10 @@
 from fastapi import FastAPI, Request, HTTPException, Depends, Response, Query
 from fastapi.responses import RedirectResponse, JSONResponse
 from agents.base import agent as web_agent
+from agents.reflection import ReflectionGenerator, ChatMessage as ReflectionChatMessage, ReflectionDocument
+from repositories.reflection_repository import ReflectionRepository
+from agents.profile_agent import ProfileAgent, ProfileUpdateRequest
+from repositories.user_profile_repository import UserProfileRepository
 from sse_starlette.sse import EventSourceResponse
 import asyncio
 from pydantic import BaseModel, Field
@@ -14,6 +18,7 @@ import firebase_admin
 from firebase_admin import credentials, auth, firestore
 import os
 import json
+import traceback
 
 # Firebase Admin SDKの初期化（Google Cloud環境用）
 firebase_admin.initialize_app()
@@ -33,6 +38,7 @@ class ChatHistory(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
     title: Optional[str] = None
+    reflection: Optional[dict] = None  # 振り返り情報
 
 async def verify_firebase_token(request: Request):
     authorization = request.headers.get("Authorization")
@@ -52,8 +58,10 @@ class ChatRequest(BaseModel):
 class CreateChatSessionRequest(BaseModel):
     initial_message: Optional[Message] = None
 
+class GenerateReflectionRequest(BaseModel):
+    session_id: str
+    user_id: Optional[str] = None
 
-# from api.routes import router
 app = FastAPI(
     title="PydanticAI API",
     version="1.0",
@@ -380,6 +388,180 @@ async def stream_generator(agent, message):
             "event": "history",
             "data": all_messages
         }
+
+# コンポーネント初期化
+reflection_generator = ReflectionGenerator()
+profile_repository = UserProfileRepository(db)
+profile_agent = ProfileAgent(profile_repository)
+
+# ユーザープロファイル管理エンドポイント
+@app.post("/api/v1/profiles/{user_id}/analyze-reflection")
+async def analyze_user_reflection(
+    user_id: str,
+    reflection: ReflectionDocument,
+    token: dict = Depends(verify_firebase_token)
+):
+    """振り返りからユーザーパターンを分析"""
+    if token["uid"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
+
+    try:
+        patterns = await profile_agent.analyze_reflection(user_id, reflection.content)
+        return {"patterns": [p.dict() for p in patterns]}
+    except Exception as e:
+        print("Error in analyze_user_reflection:", str(e))
+        print("Traceback:", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/profiles/{user_id}/instructions/{role}")
+async def get_profile_instructions(
+    user_id: str,
+    role: str,
+    token: dict = Depends(verify_firebase_token)
+):
+    """ユーザー固有の指示を取得"""
+    if token["uid"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
+
+    try:
+        # 有効な役割かどうかを確認
+        if role not in ProfileAgent.VALID_ROLES:
+            raise HTTPException(status_code=404, detail=f"Invalid role: {role}")
+
+        instructions = await profile_agent.generate_personalized_instructions(user_id, role)
+        if instructions is None:
+            # プロファイルが存在しない場合は404を返す
+            raise HTTPException(
+                status_code=404,
+                detail="Profile not found or instructions not available for this role"
+            )
+        return {"instructions": instructions}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("Error in get_profile_instructions:", str(e))
+        print("Traceback:", traceback.format_exc())
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get profile instructions: {str(e)}"
+        )
+
+
+@app.post("/api/v1/reflections/generate")
+async def generate_reflection(
+    request: GenerateReflectionRequest,
+    token: dict = Depends(verify_firebase_token)
+):
+    """チャットセッションから振り返りメモを生成"""
+    try:
+        print("Debug - Starting reflection generation")  # デバッグログ追加
+        
+        # セッションの存在確認
+        doc_ref = db.collection("chat_histories").document(request.session_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        
+        chat_data = doc.to_dict()
+        if chat_data["user_id"] != token["uid"]:
+            raise HTTPException(status_code=403, detail="Not authorized to access this chat session")
+
+        # チャット履歴をReflectionChatMessage形式に変換
+        chat_history = [
+            ReflectionChatMessage(
+                role=msg["role"],
+                content=msg["content"]
+            ) for msg in chat_data["messages"]
+        ]
+
+        print("Debug - Chat History:", chat_history)  # デバッグログ追加
+
+        # 振り返りメモの生成
+        reflection = await reflection_generator.generate_reflection(chat_history)
+        
+        print("Debug - Generated Reflection:", reflection)  # デバッグログ追加
+
+        # セッションIDとユーザーIDを設定
+        reflection.session_id = request.session_id
+        reflection.user_id = token["uid"]
+
+        # 振り返り情報をチャット履歴に追加
+        reflection_dict = reflection.to_dict()
+        print("Debug - Reflection Dict:", reflection_dict)  # デバッグログ追加
+
+        # プロファイルの更新を試みる
+        try:
+            patterns = await profile_agent.update_from_reflection(token["uid"], reflection.content)
+            print("Debug - Updated Patterns:", [p.dict() for p in patterns])  # デバッグログ追加
+        except Exception as profile_error:
+            print("Warning - Profile update failed:", str(profile_error))
+            print("Traceback:", traceback.format_exc())
+            patterns = []
+
+        doc_ref.update({
+            "reflection": reflection_dict
+        })
+
+        # 振り返りと更新されたパターンを返す
+        return {
+            "reflection": reflection_dict,
+            "patterns": [p.dict() for p in patterns]
+        }
+
+    except Exception as e:
+        print("Error in generate_reflection:", str(e))  # エラーログ追加
+        print("Traceback:", traceback.format_exc())  # スタックトレース追加
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/reflections/session/{session_id}")
+async def get_session_reflection(
+    session_id: str,
+    token: dict = Depends(verify_firebase_token)
+):
+    """セッションの振り返りメモを取得"""
+    try:
+        # セッションの存在と権限を確認
+        doc = db.collection("chat_histories").document(session_id).get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Chat session not found")
+        
+        chat_data = doc.to_dict()
+        if chat_data["user_id"] != token["uid"]:
+            raise HTTPException(status_code=403, detail="Not authorized to access this chat session")
+        
+        if "reflection" not in chat_data:
+            raise HTTPException(status_code=404, detail="Reflection not found for this session")
+
+        return {"reflection": chat_data["reflection"]}
+
+    except Exception as e:
+        print("Error in get_session_reflection:", str(e))  # エラーログ追加
+        print("Traceback:", traceback.format_exc())  # スタックトレース追加
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/reflections/user")
+async def get_user_reflections(token: dict = Depends(verify_firebase_token)):
+    """ユーザーの全振り返りメモを取得"""
+    try:
+        user_id = token["uid"]
+        docs = db.collection("chat_histories")\
+            .where("user_id", "==", user_id)\
+            .stream()
+        
+        reflections = []
+        for doc in docs:
+            data = doc.to_dict()
+            if "reflection" in data:
+                reflection = data["reflection"]
+                reflection["session_id"] = doc.id
+                reflections.append(reflection)
+
+        return {"reflections": reflections}
+
+    except Exception as e:
+        print("Error in get_user_reflections:", str(e))  # エラーログ追加
+        print("Traceback:", traceback.format_exc())  # スタックトレース追加
+        raise HTTPException(status_code=500, detail=str(e))
 
 if __name__ == "__main__":
     import uvicorn

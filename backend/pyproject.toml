@@ -13,4 +13,12 @@ dependencies = [
     "sse-starlette>=2.2.1",
     "tavily-python>=0.5.0",
     "firebase-admin>=6.3.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.0.1",
 ]
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+# イベントループスコープをfunction（各テスト関数）に設定
+asyncio_default_fixture_loop_scope = "function"
