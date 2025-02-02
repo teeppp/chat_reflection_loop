@@ -21,10 +21,10 @@ print(credentials)
 print(project)
 # %%
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    import logfire
-    
+    from dotenv import load_dotenv    
     load_dotenv()
+if os.getenv("LOGFIRE_TOKEN", None):
+    import logfire
     logfire.configure(send_to_logfire='if-token-present')
 
 # %%
@@ -116,4 +116,21 @@ if __name__ == "__main__":
     nest_asyncio.apply()
     result = agent.run_sync("AIエージェントフレームワークのはやりを検索して", deps=True)
     print(result.data)
+# %%
+if __name__ == "__main__":
+    original = result.new_messages()
+    print(original)
+# %%
+if __name__ == "__main__":
+    from pydantic_ai.messages import (
+        ModelMessage,
+        ModelMessagesTypeAdapter,
+        ModelRequest,
+        ModelResponse,
+        TextPart,
+        UserPromptPart,
+    )
+    new_message_json = result.new_messages_json()
+    new_message = ModelMessagesTypeAdapter.validate_json(new_message_json)
+    print(new_message)
 # %%
