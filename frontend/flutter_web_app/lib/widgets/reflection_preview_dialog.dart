@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_markdown/flutter_markdown.dart';
 import '../services/reflection_service.dart';
+import './user_patterns_dialog.dart';
 
 class ReflectionPreviewDialog extends StatefulWidget {
   final String threadId;
@@ -64,9 +65,29 @@ class _ReflectionPreviewDialogState extends State<ReflectionPreviewDialog> {
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
-                  IconButton(
-                    icon: const Icon(Icons.close),
-                    onPressed: () => Navigator.of(context).pop(),
+                  Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.psychology),
+                        tooltip: 'ユーザーの傾向',
+                        onPressed: () {
+                          // 現在のダイアログを閉じて傾向ダイアログを表示
+                          Navigator.of(context).pop();
+                          showDialog(
+                            context: context,
+                            builder: (context) => UserPatternsDialog(
+                              reflectionService: widget.reflectionService,
+                            ),
+                          );
+                        },
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.close),
+                        tooltip: '閉じる',
+                        onPressed: () => Navigator.of(context).pop(),
+                      ),
+                    ],
                   ),
                 ],
               ),

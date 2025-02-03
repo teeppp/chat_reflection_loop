@@ -6,6 +6,7 @@ import '../models/thread.dart';
 import '../models/chat_history_entry.dart';
 import '../services/reflection_service.dart';
 import '../widgets/reflection_preview_dialog.dart';
+import '../widgets/user_patterns_dialog.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 
@@ -247,6 +248,18 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.person_outline),
+            tooltip: 'ユーザーの傾向',
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => UserPatternsDialog(
+                  reflectionService: widget.reflectionService,
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.add),
             tooltip: '新しい会話',

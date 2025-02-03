@@ -75,6 +75,62 @@ class ReflectionService {
   }
 
   /// 振り返りメモの取得
+  /// ユーザーの傾向を取得（振り返りノートから分析）
+  Future<List<Map<String, dynamic>>> getUserPatterns(String userId) async {
+    try {
+      print('ユーザー傾向分析を開始: $userId');
+
+      // 振り返りノートの分析を要求
+      final response = await _client.post(
+        Uri.parse('$baseUrl/api/v1/profiles/$userId/analyze-reflection'),
+        headers: {
+          ..._headers,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({
+          'content': '',  // 空のコンテンツ（バックエンドで振り返りを取得）
+          'analyze_type': 'all_reflections',  // 全ての振り返りノートを分析
+          'task_name': 'ユーザー傾向分析',
+          'created_at': DateTime.now().toIso8601String(),
+        }),
+      );
+
+      print('ユーザー傾向レスポンス: ${utf8.decode(response.bodyBytes)}');
+
+      if (response.statusCode != 200) {
+        throw ReflectionException(
+          'ユーザー傾向の取得に失敗しました',
+          code: response.statusCode.toString(),
+        );
+      }
+
+      final responseText = utf8.decode(response.bodyBytes);
+      print('APIレスポンス: $responseText');
+      
+      final data = jsonDecode(responseText);
+      if (data is String) {
+        // 文字列の場合はパターンとして解釈
+        return [
+          {
+            'label': 'システム分析',
+            'description': data,
+            'confidence': 1.0
+          }
+        ];
+      }
+      
+      final patterns = data['patterns'];
+      if (patterns == null) {
+        return [];
+      }
+      
+      return List<Map<String, dynamic>>.from(patterns);
+    } catch (e) {
+      if (e is ReflectionException) rethrow;
+      throw ReflectionException('ユーザー傾向の取得中にエラーが発生しました: $e');
+    }
+  }
+
   Future<String> getReflectionMemo(String threadId) async {
     try {
       final response = await _client.get(
