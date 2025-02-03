@@ -401,13 +401,57 @@ async def analyze_user_reflection(
     reflection: ReflectionDocument,
     token: dict = Depends(verify_firebase_token)
 ):
-    """振り返りからユーザーパターンを分析"""
+    """ユーザーの全振り返りノートからパターンを分析"""
     if token["uid"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this profile")
 
     try:
-        patterns = await profile_agent.analyze_reflection(user_id, reflection.content)
-        return {"patterns": [p.dict() for p in patterns]}
+        # Firestoreから振り返りノートを取得（user_idのみでフィルタリング）
+        print(f"Fetching reflections for user: {user_id}")
+        docs = db.collection("chat_histories")\
+            .where("user_id", "==", user_id)\
+            .stream()
+
+        reflection_contents = []
+        for doc in docs:
+            data = doc.to_dict()
+            # Pythonでreflectionフィールドの存在チェック
+            if data.get("reflection") and data["reflection"].get("content"):
+                content = data["reflection"]["content"]
+                print(f"Found reflection: {content[:100]}...")  # 最初の100文字をログ
+                reflection_contents.append(content)
+
+        if not reflection_contents:
+            print("No reflection notes found for analysis")
+            return {"patterns": []}
+
+        all_patterns = []
+        for content in reflection_contents:
+            print(f"Analyzing reflection... {len(content)} characters")
+            patterns = await profile_agent.analyze_reflection(user_id, content)
+            print(f"Found patterns in categories: {set(p.category for p in patterns)}")
+            for p in patterns:
+                print(f"  - {p.category}: {p.pattern} ({p.confidence})")
+            all_patterns.extend(patterns)
+        
+        # カテゴリごとにパターンをグループ化
+        categorized_patterns = {}
+        for pattern in all_patterns:
+            if pattern.category not in categorized_patterns:
+                categorized_patterns[pattern.category] = []
+            categorized_patterns[pattern.category].append(pattern)
+        
+        # 各カテゴリ内で確信度でソート
+        for category in categorized_patterns:
+            categorized_patterns[category].sort(key=lambda p: p.confidence, reverse=True)
+        
+        return {
+            "patterns": [p.dict() for p in all_patterns],
+            "categorized": {
+                category: [p.dict() for p in patterns]
+                for category, patterns in categorized_patterns.items()
+            }
+        }
     except Exception as e:
         print("Error in analyze_user_reflection:", str(e))
         print("Traceback:", traceback.format_exc())
