@@ -10,6 +10,7 @@ import 'screens/signup_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/debug_chat_screen.dart';
 import 'services/chat_service.dart';
+import 'services/reflection_service.dart';
 
 void main() async {
   try {
@@ -44,13 +45,33 @@ void main() async {
         print('Firebase initialization error: $e');
         rethrow;
       }
-
       final apiBaseUrl = dotenv.env['API_BASE_URL'] ?? 'http://localhost:8080';
       final chatService = ChatService(baseUrl: apiBaseUrl);
-      
+      final reflectionService = ReflectionService(baseUrl: apiBaseUrl);
+
+      // Firebaseの認証状態を監視し、トークンの変更を検知
+      FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+        if (user != null) {
+          try {
+            final token = await user.getIdToken();
+            reflectionService.authToken = token;
+            print('認証トークンを設定しました');
+          } catch (e) {
+            print('認証トークンの取得に失敗: $e');
+          }
+        }
+      });
+
       runApp(
-        Provider<ChatService>(
-          create: (_) => chatService,
+        MultiProvider(
+          providers: [
+            Provider<ChatService>(
+              create: (_) => chatService,
+            ),
+            Provider<ReflectionService>(
+              create: (_) => reflectionService,
+            ),
+          ],
           child: const MyApp(),
         ),
       );
@@ -104,7 +125,10 @@ class MyApp extends StatelessWidget {
 
                 if (snapshot.hasData) {
                   print('User is signed in');
-                  return ChatScreen(chatService: Provider.of<ChatService>(context));
+                  return ChatScreen(
+                    chatService: Provider.of<ChatService>(context),
+                    reflectionService: Provider.of<ReflectionService>(context),
+                  );
                 }
 
                 print('User is not signed in');
@@ -113,7 +137,10 @@ class MyApp extends StatelessWidget {
             ),
         '/login': (context) => const LoginScreen(),
         '/signup': (context) => const SignUpScreen(),
-        '/home': (context) => ChatScreen(chatService: Provider.of<ChatService>(context)),
+        '/home': (context) => ChatScreen(
+              chatService: Provider.of<ChatService>(context),
+              reflectionService: Provider.of<ReflectionService>(context),
+            ),
         '/debug': (context) => const HomeScreen(), // JWTトークン表示用
         '/debug-chat': (context) => DebugChatScreen(chatService: Provider.of<ChatService>(context)), // デバッグチャット画面
       },

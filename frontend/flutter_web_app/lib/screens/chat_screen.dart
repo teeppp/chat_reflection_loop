@@ -4,14 +4,19 @@ import 'dart:async';
 import '../services/chat_service.dart';
 import '../models/thread.dart';
 import '../models/chat_history_entry.dart';
+import '../services/reflection_service.dart';
+import '../widgets/reflection_preview_dialog.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 
 class ChatScreen extends StatefulWidget {
   final ChatService chatService;
+  final ReflectionService reflectionService;
 
   const ChatScreen({
     super.key,
     required this.chatService,
+    required this.reflectionService,
   });
 
   @override
@@ -155,13 +160,56 @@ class _ChatScreenState extends State<ChatScreen> {
       // メッセージを送信（バックエンドで自動的に履歴に追加される）
       await widget.chatService.sendMessage(text, _currentThread!.id);
       
+      // ユーザーメッセージの振り返り更新
+      await widget.reflectionService.updateReflection(
+        threadId: _currentThread!.id,
+        messageContent: text,
+        isUserMessage: true,
+      );
+      
       // 履歴を読み込んで表示を更新
       await _loadChatHistory();
+
+      // ボットの応答に対する振り返り更新とユーザーインストラクション更新
+      if (_messages.isNotEmpty && !_messages.first.isMe) {
+        try {
+          // 振り返りを生成
+          await widget.reflectionService.updateReflection(
+            threadId: _currentThread!.id,
+            messageContent: _messages.first.text,
+            isUserMessage: false,
+          );
+          
+          // Firebaseから現在のユーザーIDを取得
+          final user = FirebaseAuth.instance.currentUser;
+          if (user != null) {
+            // ユーザーインストラクションを更新
+            await widget.reflectionService.updateUserInstructions(user.uid);
+          }
+        } catch (e) {
+          print('振り返りまたはユーザーインストラクションの更新に失敗: $e');
+        }
+      }
     } catch (e) {
       _showError('エラー: $e');
     } finally {
       setState(() => _isLoading = false);
     }
+  }
+
+  void _showReflectionPreview() {
+    if (_currentThread == null) {
+      _showError('スレッドが選択されていません');
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (context) => ReflectionPreviewDialog(
+        threadId: _currentThread!.id,
+        reflectionService: widget.reflectionService,
+      ),
+    );
   }
 
   void _showError(String message) {
@@ -207,7 +255,12 @@ class _ChatScreenState extends State<ChatScreen> {
           IconButton(
             icon: const Icon(Icons.delete),
             tooltip: 'スレッドを削除',
-            onPressed: _deleteThread,
+            onPressed: _currentThread == null ? null : _deleteThread,
+          ),
+          IconButton(
+            icon: const Icon(Icons.description),
+            tooltip: '振り返りメモ',
+            onPressed: _currentThread == null ? null : _showReflectionPreview,
           ),
           if (kDebugMode) ...[
             IconButton(
