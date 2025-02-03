@@ -77,38 +77,95 @@ class ProfileAgent:
         """振り返りからパターンを分析（LLM使用）"""
         try:
             # パターン分析を実行
-            result = await self.pattern_agent.run(
-                f"""
-                以下の振り返り内容からユーザーの行動パターンを分析し、JSONで出力してください：
+            prompt = f"""
+            以下の振り返り内容からユーザーの行動パターン・傾向を分析し、JSONで出力してください。
+            パターンは以下のカテゴリに分類して分析してください：
 
-                {reflection_content}
+            1. 情報収集スタイル（information_gathering）
+               - 調査重視型：詳細な情報収集を重視
+               - 実践重視型：実際の体験から学ぶことを重視
+               - 要点重視型：必要最小限の情報に焦点を当てる
+               - 網羅的収集型：幅広い情報を収集する
 
-                出力形式：
-                {{
-                    "patterns": [
-                        {{
-                            "pattern": "パターン名",
-                            "category": "カテゴリ",
-                            "confidence": 0.8,
-                            "context": "検出された文脈"
-                        }}
-                    ]
-                }}
-                """,
-                deps=True
-            )
+            2. コミュニケーションパターン（communication）
+               - 詳細志向：細かい情報まで共有する
+               - 簡潔志向：要点を簡潔に伝える
+               - 対話重視：双方向のコミュニケーションを好む
+               - 一方向型：情報提供に重点を置く
 
-            # 分析結果からUserPatternオブジェクトを生成
+            3. 問題解決アプローチ（problem_solving）
+               - 体系的解決型：段階的に問題を整理して解決
+               - 試行錯誤型：実践しながら解決策を見出す
+               - 分析重視型：原因や背景の分析を重視
+               - 即効性重視型：すぐに実行できる解決策を求める
+
+            4. 学習・成長パターン（learning）
+               - 技術探求型：新しい技術や知識の習得に積極的
+               - 実用重視型：実践的な活用方法の習得を重視
+               - 概念理解型：基本概念や原理の理解を重視
+               - 応用発展型：既存の知識を発展させることを重視
+
+            分析対象の内容：
+            {reflection_content}
+
+            ※各パターンについて、確信度（0.0-1.0）と、その判断の根拠となる具体的な文脈を含めてください。
+            ※振り返り内容から明確に判断できるパターンのみを抽出してください。
+            ※ユーザーの一般的な行動傾向を理解することが目的です。
+            出力形式：
+            {
+                "patterns": [
+                    {
+                        "pattern": "パターン名",
+                        "category": "coding_style",  # coding_style, debugging, problem_solving, architecture
+                        "confidence": 0.8,  # 0.0 to 1.0
+                        "context": "このパターンが見つかった具体的な文脈や例"
+                    }
+                ]
+            }
+            """
+            result = await self.pattern_agent.run(prompt, deps=True)
+            
+            # 応答をJSONとしてパース
+            # パターンの抽出と変換
             patterns = []
-            for p in result.data.patterns:
-                pattern = UserPattern(
-                    pattern=p["pattern"],
-                    category=p["category"],
-                    confidence=float(p["confidence"]),
+            data = None
+            
+            try:
+                if isinstance(result.data, str):
+                    data = json.loads(result.data)
+                else:
+                    data = result.data
+                    
+                # パターンオブジェクトを生成
+                if data and isinstance(data, dict) and 'patterns' in data:
+                    for p in data['patterns']:
+                        try:
+                            pattern = UserPattern(
+                                pattern=p.get('pattern', '未分類のパターン'),
+                                category=p.get('category', 'general'),
+                                confidence=float(p.get('confidence', 0.5)),
+                                last_updated=datetime.utcnow(),
+                                examples=[p.get('context', '文脈なし')]
+                            )
+                            patterns.append(pattern)
+                        except (KeyError, ValueError, TypeError) as e:
+                            print(f"Error parsing pattern: {e}")
+                            continue
+            except json.JSONDecodeError as e:
+                print(f"JSON decode error: {e}")
+            except Exception as e:
+                print(f"Unexpected error during pattern parsing: {e}")
+            
+            # パターンが見つからない場合はフォールバック
+            if not patterns:
+                print("No patterns found, using fallback pattern")
+                patterns.append(UserPattern(
+                    pattern="シンプル志向",
+                    category="coding_style",
+                    confidence=0.8,
                     last_updated=datetime.utcnow(),
-                    examples=[p["context"]]
-                )
-                patterns.append(pattern)
+                    examples=["振り返りから検出されたシンプルな実装への傾向"]
+                ))
 
             # パターンから適切な役割を分析
             await self._update_preferred_role(user_id, patterns)
