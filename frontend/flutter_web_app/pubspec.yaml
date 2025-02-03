@@ -31,6 +31,9 @@ dependencies:
   # State management
   provider: ^6.1.0
 
+  # Markdown rendering
+  flutter_markdown: ^0.6.18
+
 dev_dependencies:
   flutter_test:
     sdk: flutter
