@@ -1,8 +1,9 @@
 """ユーザープロファイル管理のエージェントクラス"""
 from datetime import datetime
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 from pydantic import BaseModel
 import json
+import logging
 
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.vertexai import VertexAIModel
@@ -14,16 +15,16 @@ from repositories.user_profile_repository import (
     PersonalizedAgentInstruction,
     UserProfileRepository
 )
+from .pattern_analyzer import PatternAnalyzer
+from .models import Pattern, PatternCategory, ProfileLabel, ProfileCluster
+
+logger = logging.getLogger(__name__)
 
 class ProfileUpdateRequest(BaseModel):
     """プロファイル更新リクエスト"""
     patterns: Optional[List[UserPattern]] = None
     instructions: Optional[List[AgentInstruction]] = None
     personalized_instructions: Optional[str] = None
-
-class PatternAnalysisResult(BaseModel):
-    """パターン分析結果"""
-    patterns: List[Dict[str, str | float | List[str]]]
 
 class RoleAnalysisResult(BaseModel):
     """役割分析結果"""
@@ -33,30 +34,15 @@ class RoleAnalysisResult(BaseModel):
 
 class ProfileAgent:
     """ユーザープロファイル管理エージェント"""
-    VALID_ROLES = ["code", "architect", "ask"]  # 有効な役割のリスト
+    VALID_ROLES = ["learn", "create", "assist"]  # 有効な役割のリスト
 
     def __init__(self, repository: UserProfileRepository):
         self.repository = repository
         credentials, project = google.auth.default()
         model = VertexAIModel('gemini-2.0-flash-exp')
-        self.pattern_agent = Agent(model, deps_type=bool)
         self.role_agent = Agent(model, deps_type=bool)
-
-        # パターン分析ツールを設定
-        @self.pattern_agent.tool()
-        async def analyze_patterns(ctx: RunContext[PatternAnalysisResult]) -> PatternAnalysisResult:
-            """振り返り内容からユーザーパターンを分析"""
-            # システムメッセージを追加
-            ctx.add_system_message("""
-            あなたはユーザーの振り返りを分析し、行動パターンを特定する専門家です。
-            以下のような観点でパターンを抽出してください：
-            - コーディングスタイル
-            - デバッグ手法
-            - アーキテクチャ設計の傾向
-            - 問題解決アプローチ
-            """)
-            result = await ctx.model.run_model(ctx.messages)
-            return PatternAnalysisResult.model_validate_json(result.data)
+        self.instruction_agent = Agent(model, deps_type=bool)
+        self.pattern_analyzer = PatternAnalyzer()
 
         # 役割分析ツールを設定
         @self.role_agent.tool()
@@ -66,139 +52,54 @@ class ProfileAgent:
             ctx.add_system_message("""
             あなたはユーザーの行動パターンから最適な役割を判断する専門家です。
             以下の役割から最適なものを選択してください：
-            - code: 実装重視、コーディングスキル
-            - architect: 設計重視、システム構造
-            - ask: 質問対応、情報提供
+            - learn: 新しい知識やスキルの習得を目的とするユーザー
+              • 体系的な学習アプローチを好む
+              • ステップバイステップの説明を求める
+              • 具体例や参考資料を重視する
+            
+            - create: コンテンツ作成や問題解決を行うユーザー
+              • アイデアの具現化を重視
+              • 創造的な問題解決アプローチ
+              • プロジェクトベースの取り組み
+            
+            - assist: 日常的なタスクや質問の支援を求めるユーザー
+              • 即時的な問題解決を求める
+              • 実用的なアドバイスを重視
+              • シンプルで直接的な回答を好む
             """)
             result = await ctx.model.run_model(ctx.messages)
             return RoleAnalysisResult.model_validate_json(result.data)
 
+    def _convert_to_user_pattern(self, pattern: Pattern) -> UserPattern:
+        """PatternをUserPatternに変換"""
+        return UserPattern(
+            pattern=pattern.pattern,
+            category=pattern.category.value,
+            confidence=pattern.confidence,
+            last_updated=pattern.detected_at,
+            examples=pattern.context
+        )
+
     async def analyze_reflection(self, user_id: str, reflection_content: str) -> List[UserPattern]:
-        """振り返りからパターンを分析（LLM使用）"""
+        """振り返りからパターンを分析"""
         try:
-            # パターン分析を実行
-            prompt = f"""
-            以下の振り返り内容からユーザーの行動パターン・傾向を分析し、JSONで出力してください。
-            パターンは以下のカテゴリに分類して分析してください：
-
-            1. 情報収集スタイル（information_gathering）
-               - 調査重視型：詳細な情報収集を重視
-               - 実践重視型：実際の体験から学ぶことを重視
-               - 要点重視型：必要最小限の情報に焦点を当てる
-               - 網羅的収集型：幅広い情報を収集する
-
-            2. コミュニケーションパターン（communication）
-               - 詳細志向：細かい情報まで共有する
-               - 簡潔志向：要点を簡潔に伝える
-               - 対話重視：双方向のコミュニケーションを好む
-               - 一方向型：情報提供に重点を置く
-
-            3. 問題解決アプローチ（problem_solving）
-               - 体系的解決型：段階的に問題を整理して解決
-               - 試行錯誤型：実践しながら解決策を見出す
-               - 分析重視型：原因や背景の分析を重視
-               - 即効性重視型：すぐに実行できる解決策を求める
-
-            4. 学習・成長パターン（learning）
-               - 技術探求型：新しい技術や知識の習得に積極的
-               - 実用重視型：実践的な活用方法の習得を重視
-               - 概念理解型：基本概念や原理の理解を重視
-               - 応用発展型：既存の知識を発展させることを重視
-
-            分析対象の内容：
-            {reflection_content}
-
-            ※各パターンについて、確信度（0.0-1.0）と、その判断の根拠となる具体的な文脈を含めてください。
-            ※振り返り内容から明確に判断できるパターンのみを抽出してください。
-            ※ユーザーの一般的な行動傾向を理解することが目的です。
-            出力形式：
-            {
-                "patterns": [
-                    {
-                        "pattern": "パターン名",
-                        "category": "coding_style",  # coding_style, debugging, problem_solving, architecture
-                        "confidence": 0.8,  # 0.0 to 1.0
-                        "context": "このパターンが見つかった具体的な文脈や例"
-                    }
-                ]
-            }
-            """
-            result = await self.pattern_agent.run(prompt, deps=True)
+            # PatternAnalyzerを使用してパターンを分析
+            analysis_result = await self.pattern_analyzer.analyze(reflection_content)
             
-            # 応答をJSONとしてパース
-            # パターンの抽出と変換
-            patterns = []
-            data = None
+            if analysis_result.error_occurred:
+                logger.warning(f"Pattern analysis error: {analysis_result.error_message}")
             
-            try:
-                if isinstance(result.data, str):
-                    data = json.loads(result.data)
-                else:
-                    data = result.data
-                    
-                # パターンオブジェクトを生成
-                if data and isinstance(data, dict) and 'patterns' in data:
-                    for p in data['patterns']:
-                        try:
-                            pattern = UserPattern(
-                                pattern=p.get('pattern', '未分類のパターン'),
-                                category=p.get('category', 'general'),
-                                confidence=float(p.get('confidence', 0.5)),
-                                last_updated=datetime.utcnow(),
-                                examples=[p.get('context', '文脈なし')]
-                            )
-                            patterns.append(pattern)
-                        except (KeyError, ValueError, TypeError) as e:
-                            print(f"Error parsing pattern: {e}")
-                            continue
-            except json.JSONDecodeError as e:
-                print(f"JSON decode error: {e}")
-            except Exception as e:
-                print(f"Unexpected error during pattern parsing: {e}")
+            # PatternをUserPatternに変換
+            patterns = [self._convert_to_user_pattern(p) for p in analysis_result.patterns]
             
-            # パターンが見つからない場合はフォールバック
-            if not patterns:
-                print("No patterns found, using fallback pattern")
-                patterns.append(UserPattern(
-                    pattern="シンプル志向",
-                    category="coding_style",
-                    confidence=0.8,
-                    last_updated=datetime.utcnow(),
-                    examples=["振り返りから検出されたシンプルな実装への傾向"]
-                ))
-
             # パターンから適切な役割を分析
             await self._update_preferred_role(user_id, patterns)
             
             return patterns
+            
         except Exception as e:
-            print(f"Error in analyze_reflection: {str(e)}")
-            return self._fallback_pattern_analysis(reflection_content)
-
-    def _fallback_pattern_analysis(self, content: str) -> List[UserPattern]:
-        """LLM失敗時のフォールバックパターン分析"""
-        patterns = []
-        normalized_content = ' '.join(content.split())
-
-        if any(word in normalized_content.lower() for word in ["シンプル", "simple", "簡潔"]):
-            patterns.append(UserPattern(
-                pattern="シンプル志向",
-                category="coding_style",
-                confidence=0.8,
-                last_updated=datetime.utcnow(),
-                examples=[content]
-            ))
-
-        if any(word in normalized_content.lower() for word in ["デバッグ", "debug", "ログ", "log"]):
-            patterns.append(UserPattern(
-                pattern="デバッグ重視",
-                category="debugging",
-                confidence=0.7,
-                last_updated=datetime.utcnow(),
-                examples=[content]
-            ))
-
-        return patterns
+            logger.error(f"Error in analyze_reflection: {str(e)}")
+            return []
 
     async def _update_preferred_role(self, user_id: str, patterns: List[UserPattern]) -> None:
         """パターンに基づいて推奨役割を更新"""
@@ -219,7 +120,7 @@ class ProfileAgent:
 
                 出力形式：
                 {{
-                    "role": "code/architect/ask",
+                    "role": "learn/create/assist",
                     "confidence": 0.8,
                     "reasoning": "判断理由"
                 }}
@@ -271,22 +172,53 @@ class ProfileAgent:
             if not role_instructions:
                 return None
 
-            # パターンに基づいて指示をカスタマイズ
+            # LLMを使用してパターンに基づく指示を生成
             customized_instructions = [role_instructions]
+            pattern_groups = {}
+            
+            # パターンをカテゴリーごとにグループ化
             for pattern in profile.patterns:
-                if pattern.category == "coding_style":
-                    customized_instructions.extend([
-                        "- シンプルで読みやすいコードを心がける",
-                        "- 複雑な構造を避ける",
-                        "- 明確で理解しやすい実装を優先する"
+                if pattern.confidence > 0.5:  # 一定以上の確信度のパターンのみ考慮
+                    if pattern.category not in pattern_groups:
+                        pattern_groups[pattern.category] = []
+                    pattern_groups[pattern.category].append(pattern)
+            
+            if pattern_groups:
+                # パターンの説明を生成
+                patterns_description = "\n".join([
+                    f"カテゴリー: {category}\nパターン:\n" + "\n".join([
+                        f"- {p.pattern} (確信度: {p.confidence})"
+                        for p in patterns
                     ])
-
-                if pattern.category == "debugging":
-                    customized_instructions.extend([
-                        "- 詳細なログ出力を含める",
-                        "- エラーハンドリングを丁寧に実装",
-                        "- デバッグ情報の可視性を重視する"
-                    ])
+                    for category, patterns in pattern_groups.items()
+                ])
+                
+                # LLMに指示を生成させる
+                result = await self.instruction_agent.run(
+                    f"""
+                    以下のユーザーパターンに基づいて、ユーザーに合わせた具体的な指示を3つ生成してください。
+                    
+                    ユーザーの役割: {role_to_use}
+                    
+                    パターン情報:
+                    {patterns_description}
+                    
+                    出力形式：
+                    [
+                        "指示1",
+                        "指示2",
+                        "指示3"
+                    ]
+                    """,
+                    deps=True
+                )
+                
+                try:
+                    generated_instructions = json.loads(result.data)
+                    if isinstance(generated_instructions, list):
+                        customized_instructions.extend(generated_instructions)
+                except json.JSONDecodeError:
+                    logger.error("Failed to parse generated instructions")
 
             # 指示を結合して保存
             final_instructions = "\n".join(customized_instructions)
