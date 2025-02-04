@@ -1,22 +1,31 @@
 """ユーザープロファイル管理のエージェントクラス"""
 from datetime import datetime
-from typing import List, Optional, Dict, Tuple
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 import json
 import logging
 
-from pydantic_ai import Agent, RunContext
-from pydantic_ai.models.vertexai import VertexAIModel
+from pydantic_ai.agent import Agent
+from pydantic_ai.agent import RunContext
+from pydantic_ai.models.vertexai import VertexAIModel  # 修正: vertex_ai → vertexai
 import google.auth
+
+from agents.pattern_analysis_engine import PatternAnalysisEngine
+from agents.models import (
+    Pattern,
+    DynamicLabel,
+    LabelCluster,
+    DynamicCategory,
+    DynamicPatternEngine,
+    PatternAnalysisResult,
+    ProfileInsightResult  # ProfileInsightResultをmodelsから直接インポート
+)
 
 from repositories.user_profile_repository import (
     UserPattern,
     AgentInstruction,
-    PersonalizedAgentInstruction,
     UserProfileRepository
 )
-from .pattern_analyzer import PatternAnalyzer
-from .models import Pattern, PatternCategory, ProfileLabel, ProfileCluster
 
 logger = logging.getLogger(__name__)
 
@@ -25,113 +34,174 @@ class ProfileUpdateRequest(BaseModel):
     patterns: Optional[List[UserPattern]] = None
     instructions: Optional[List[AgentInstruction]] = None
     personalized_instructions: Optional[str] = None
-
-class RoleAnalysisResult(BaseModel):
-    """役割分析結果"""
-    role: str
-    confidence: float
-    reasoning: str
+    labels: Optional[List[DynamicLabel]] = None
+    categories: Optional[List[DynamicCategory]] = None
 
 class ProfileAgent:
     """ユーザープロファイル管理エージェント"""
-    VALID_ROLES = ["learn", "create", "assist"]  # 有効な役割のリスト
 
     def __init__(self, repository: UserProfileRepository):
         self.repository = repository
         credentials, project = google.auth.default()
         model = VertexAIModel('gemini-2.0-flash-exp')
-        self.role_agent = Agent(model, deps_type=bool)
+        self.insight_agent = Agent(model, deps_type=bool)
         self.instruction_agent = Agent(model, deps_type=bool)
-        self.pattern_analyzer = PatternAnalyzer()
+        
+        # 動的パターン分析エンジンを初期化
+        self.pattern_engine = PatternAnalysisEngine(
+            config=DynamicPatternEngine(
+                min_confidence=0.6,
+                max_labels_per_pattern=10,
+                clustering_threshold=0.7,
+                label_similarity_threshold=0.6
+            )
+        )
 
-        # 役割分析ツールを設定
-        @self.role_agent.tool()
-        async def analyze_role(ctx: RunContext[RoleAnalysisResult]) -> RoleAnalysisResult:
-            """パターンから最適な役割を分析"""
-            # システムメッセージを追加
+        # プロファイル分析ツールを設定
+        @self.insight_agent.tool()
+        async def analyze_profile_insights(
+            ctx: RunContext[ProfileInsightResult]
+        ) -> ProfileInsightResult:
+            """プロファイルから主要な特徴を分析"""
             ctx.add_system_message("""
-            あなたはユーザーの行動パターンから最適な役割を判断する専門家です。
-            以下の役割から最適なものを選択してください：
-            - learn: 新しい知識やスキルの習得を目的とするユーザー
-              • 体系的な学習アプローチを好む
-              • ステップバイステップの説明を求める
-              • 具体例や参考資料を重視する
-            
-            - create: コンテンツ作成や問題解決を行うユーザー
-              • アイデアの具現化を重視
-              • 創造的な問題解決アプローチ
-              • プロジェクトベースの取り組み
-            
-            - assist: 日常的なタスクや質問の支援を求めるユーザー
-              • 即時的な問題解決を求める
-              • 実用的なアドバイスを重視
-              • シンプルで直接的な回答を好む
+            あなたはユーザーのプロファイルから重要な特徴とパターンを分析する専門家です。
+            ラベルとクラスター情報から、ユーザーの主要な特徴を抽出し、その理由を説明してください。
+            回答は具体的で、ユーザーの行動パターンに基づいた分析を含める必要があります。
             """)
             result = await ctx.model.run_model(ctx.messages)
-            return RoleAnalysisResult.model_validate_json(result.data)
+            return ProfileInsightResult.model_validate_json(result.data)
 
     def _convert_to_user_pattern(self, pattern: Pattern) -> UserPattern:
         """PatternをUserPatternに変換"""
         return UserPattern(
             pattern=pattern.pattern,
-            category=pattern.category.value,
+            category=pattern.category,
             confidence=pattern.confidence,
             last_updated=pattern.detected_at,
             examples=pattern.context
         )
 
-    async def analyze_reflection(self, user_id: str, reflection_content: str) -> List[UserPattern]:
+    async def analyze_reflection(
+        self,
+        user_id: str,
+        reflection_content: str
+    ) -> PatternAnalysisResult:
         """振り返りからパターンを分析"""
         try:
-            # PatternAnalyzerを使用してパターンを分析
-            analysis_result = await self.pattern_analyzer.analyze(reflection_content)
+            # 動的パターン分析を実行
+            analysis_result = await self.pattern_engine.analyze_pattern(reflection_content)
             
             if analysis_result.error_occurred:
                 logger.warning(f"Pattern analysis error: {analysis_result.error_message}")
+                return analysis_result
             
-            # PatternをUserPatternに変換
-            patterns = [self._convert_to_user_pattern(p) for p in analysis_result.patterns]
+            # プロファイルを更新
+            await self._update_profile_with_analysis(user_id, analysis_result)
             
-            # パターンから適切な役割を分析
-            await self._update_preferred_role(user_id, patterns)
-            
-            return patterns
+            return analysis_result
             
         except Exception as e:
             logger.error(f"Error in analyze_reflection: {str(e)}")
-            return []
+            return PatternAnalysisResult(
+                patterns=[],
+                error_occurred=True,
+                error_message=str(e)
+            )
 
-    async def _update_preferred_role(self, user_id: str, patterns: List[UserPattern]) -> None:
-        """パターンに基づいて推奨役割を更新"""
+    async def _update_profile_with_analysis(
+        self,
+        user_id: str,
+        analysis: PatternAnalysisResult
+    ) -> None:
+        """分析結果でプロファイルを更新"""
         try:
-            patterns_str = "\n".join([
-                f"パターン: {p.pattern}\n"
-                f"カテゴリ: {p.category}\n"
-                f"確信度: {p.confidence}\n"
-                f"文脈: {p.examples[0] if p.examples else 'なし'}\n"
-                for p in patterns
-            ])
+            # パターンを更新
+            for pattern in analysis.patterns:
+                user_pattern = self._convert_to_user_pattern(pattern)
+                await self.repository.add_pattern(user_id, user_pattern)
+            
+            # ラベルを更新
+            for label in analysis.labels:
+                await self.repository.add_label(user_id, label)
+            
+            # クラスターを更新
+            for cluster in analysis.clusters:
+                await self.repository.update_cluster(user_id, cluster)
+            
+            # プロファイルの分析を実行
+            insights = await self._analyze_profile_insights(user_id)
+            if insights:
+                await self.repository.update_profile_insights(user_id, insights)
+                
+        except Exception as e:
+            logger.error(f"Error updating profile: {str(e)}")
 
-            result = await self.role_agent.run(
+    async def _analyze_profile_insights(
+        self,
+        user_id: str
+    ) -> Optional[ProfileInsightResult]:
+        """プロファイルの主要な特徴を分析"""
+        try:
+            profile = await self.repository.get_profile(user_id)
+            if not profile:
+                return None
+
+            # プロファイル情報を文字列化
+            profile_info = {
+                "labels": [label.text for label in profile.labels],
+                "clusters": [
+                    {"theme": c.theme, "labels": c.labels}
+                    for c in profile.clusters
+                ],
+                "patterns": [p.pattern for p in profile.patterns]
+            }
+            
+            result = await self.insight_agent.run(
                 f"""
-                以下のユーザーパターンから最適な役割を判断し、JSONで出力してください：
+                あなたは、ユーザーの行動パターンや特徴を深く分析する専門家です。
+                以下のプロファイル情報から、この人独自の特徴やパターンを抽出し、洞察を提供してください。
 
-                {patterns_str}
+                現在のプロファイル情報：
+                {json.dumps(profile_info, indent=2, ensure_ascii=False)}
 
-                出力形式：
+                分析の際の重要なポイント：
+                1. 表面的な分類ではなく、ユーザー固有の行動や思考のパターンを見つけ出す
+                2. ラベル間の関連性から、より深い洞察を導き出す
+                3. 時間の経過による変化や一貫性のあるパターンを識別する
+                4. 特に以下の観点での分析を重視：
+                   - 問題解決アプローチの特徴
+                   - 学習・理解の好みのパターン
+                   - コミュニケーションスタイルの独自性
+                   - 意思決定プロセスの特徴
+                   - モチベーションの源泉
+
+                以下の形式でJSONを出力してください：
                 {{
-                    "role": "learn/create/assist",
-                    "confidence": 0.8,
-                    "reasoning": "判断理由"
+                    "primary_labels": [
+                        "最も特徴的なラベル（ユーザー固有の表現で）",
+                        "次に特徴的なラベル"
+                    ],
+                    "clusters": [
+                        {{
+                            "theme": "発見されたパターンの本質",
+                            "labels": [
+                                "関連する具体的な行動や特徴",
+                                "それを裏付ける別の特徴"
+                            ]
+                        }}
+                    ],
+                    "confidence": 0.0-1.0,
+                    "reasoning": "なぜそのような特徴が見られるのか、どのような文脈で現れているのかの詳細な説明"
                 }}
                 """,
                 deps=True
             )
 
-            if result.data.role in self.VALID_ROLES:
-                await self.repository.update_preferred_role(user_id, result.data.role)
+            return result.data
+
         except Exception as e:
-            print(f"Error in update_preferred_role: {str(e)}")
+            logger.error(f"Error in profile insights analysis: {str(e)}")
+            return None
 
     async def update_profile(self, user_id: str, request: ProfileUpdateRequest) -> None:
         """プロファイルを更新"""
@@ -147,11 +217,19 @@ class ProfileAgent:
                 user_id,
                 request.personalized_instructions
             )
+            
+        if request.labels:
+            for label in request.labels:
+                await self.repository.add_label(user_id, label)
+                
+        if request.categories:
+            for category in request.categories:
+                await self.repository.add_category(user_id, category)
 
     async def generate_personalized_instructions(
         self,
         user_id: str,
-        base_role: Optional[str] = None
+        context: Optional[Dict[str, Any]] = None
     ) -> Optional[str]:
         """ユーザー固有の指示を生成"""
         try:
@@ -159,100 +237,85 @@ class ProfileAgent:
             if not profile:
                 return None
 
-            # base_roleが指定されていない場合は、preferred_roleを使用
-            role_to_use = base_role if base_role in self.VALID_ROLES else profile.preferred_role
+            # プロファイル情報を収集
+            profile_info = {
+                "labels": [label.text for label in profile.labels],
+                "clusters": [
+                    {"theme": c.theme, "labels": c.labels}
+                    for c in profile.clusters
+                ],
+                "patterns": [p.pattern for p in profile.patterns]
+            }
+            
+            if context:
+                profile_info["context"] = context
 
-            # 指定された役割の基本指示を取得
-            role_instructions = None
-            for instruction in profile.base_instructions:
-                if instruction.role == role_to_use:
-                    role_instructions = instruction.instructions
-                    break
+            # LLMに指示を生成させる
+            result = await self.instruction_agent.run(
+                f"""
+                以下のユーザープロファイル情報に基づいて、
+                ユーザーに合わせた具体的な指示を生成してください：
 
-            if not role_instructions:
+                {json.dumps(profile_info, indent=2, ensure_ascii=False)}
+
+                以下の点を考慮してください：
+                1. ユーザーの主要なラベルとパターン
+                2. クラスター分析から見られる傾向
+                3. コンテキスト情報（提供されている場合）
+
+                出力形式：
+                [
+                    "具体的な指示1",
+                    "具体的な指示2",
+                    "具体的な指示3"
+                ]
+                """,
+                deps=True
+            )
+
+            try:
+                instructions = json.loads(result.data)
+                if isinstance(instructions, list):
+                    final_instructions = "\n".join(instructions)
+                    await self.repository.update_personalized_instructions(
+                        user_id,
+                        final_instructions
+                    )
+                    return final_instructions
+            except json.JSONDecodeError:
+                logger.error("Failed to parse generated instructions")
                 return None
 
-            # LLMを使用してパターンに基づく指示を生成
-            customized_instructions = [role_instructions]
-            pattern_groups = {}
-            
-            # パターンをカテゴリーごとにグループ化
-            for pattern in profile.patterns:
-                if pattern.confidence > 0.5:  # 一定以上の確信度のパターンのみ考慮
-                    if pattern.category not in pattern_groups:
-                        pattern_groups[pattern.category] = []
-                    pattern_groups[pattern.category].append(pattern)
-            
-            if pattern_groups:
-                # パターンの説明を生成
-                patterns_description = "\n".join([
-                    f"カテゴリー: {category}\nパターン:\n" + "\n".join([
-                        f"- {p.pattern} (確信度: {p.confidence})"
-                        for p in patterns
-                    ])
-                    for category, patterns in pattern_groups.items()
-                ])
-                
-                # LLMに指示を生成させる
-                result = await self.instruction_agent.run(
-                    f"""
-                    以下のユーザーパターンに基づいて、ユーザーに合わせた具体的な指示を3つ生成してください。
-                    
-                    ユーザーの役割: {role_to_use}
-                    
-                    パターン情報:
-                    {patterns_description}
-                    
-                    出力形式：
-                    [
-                        "指示1",
-                        "指示2",
-                        "指示3"
-                    ]
-                    """,
-                    deps=True
-                )
-                
-                try:
-                    generated_instructions = json.loads(result.data)
-                    if isinstance(generated_instructions, list):
-                        customized_instructions.extend(generated_instructions)
-                except json.JSONDecodeError:
-                    logger.error("Failed to parse generated instructions")
-
-            # 指示を結合して保存
-            final_instructions = "\n".join(customized_instructions)
-            await self.repository.update_personalized_instructions(user_id, final_instructions)
-            return final_instructions
         except Exception as e:
-            print(f"Error in generate_personalized_instructions: {str(e)}")
+            logger.error(f"Error in generate_personalized_instructions: {str(e)}")
             return None
 
     async def update_from_reflection(
         self,
         user_id: str,
         reflection_content: str
-    ) -> List[UserPattern]:
+    ) -> PatternAnalysisResult:
         """振り返りからプロファイルを更新"""
         try:
             # パターンを分析
-            new_patterns = await self.analyze_reflection(user_id, reflection_content)
-
+            analysis_result = await self.analyze_reflection(user_id, reflection_content)
+            
             # プロファイルを更新
-            for pattern in new_patterns:
-                await self.repository.add_pattern(user_id, pattern)
+            await self._update_profile_with_analysis(user_id, analysis_result)
+            
+            # 指示を更新
+            instructions = await self.generate_personalized_instructions(user_id)
+            if instructions:
+                await self.repository.update_personalized_instructions(
+                    user_id,
+                    instructions
+                )
 
-            # preferred_roleを反映した指示の更新
-            profile = await self.repository.get_profile(user_id)
-            if profile:
-                final_instructions = await self.generate_personalized_instructions(user_id)
-                if final_instructions:
-                    await self.repository.update_personalized_instructions(
-                        user_id,
-                        final_instructions
-                    )
-
-            return new_patterns
+            return analysis_result
         except Exception as e:
-            print(f"Error in update_from_reflection: {str(e)}")
-            return []
+            logger.error(f"Error in update_from_reflection: {str(e)}")
+            return PatternAnalysisResult(
+                patterns=[],
+                error_occurred=True,
+                error_message=str(e)
+            )

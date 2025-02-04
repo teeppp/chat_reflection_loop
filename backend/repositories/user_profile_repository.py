@@ -1,208 +1,316 @@
 """ユーザープロファイル管理のリポジトリクラス"""
-from datetime import datetime
 from typing import List, Optional
+from datetime import datetime
 from pydantic import BaseModel
+import json
+import logging
+from google.cloud import firestore
+
+from agents.models import (
+    DynamicLabel,
+    LabelCluster,
+    DynamicCategory,
+    ProfileInsightResult,
+    Pattern,
+    AgentInstruction,
+    UserProfile
+)
+
+logger = logging.getLogger(__name__)
 
 class UserPattern(BaseModel):
-    """ユーザーの行動パターンを表すデータモデル"""
+    """ユーザーの行動パターン"""
     pattern: str
     category: str
     confidence: float
     last_updated: datetime
     examples: List[str]
 
-    @classmethod
-    def from_llm_response(cls, llm_data: dict) -> 'UserPattern':
-        """LLMの分析結果からパターンを生成"""
-        return cls(
-            pattern=llm_data["pattern"],
-            category=llm_data["category"],
-            confidence=float(llm_data["confidence"]),
-            last_updated=datetime.utcnow(),
-            examples=[llm_data["context"]]
-        )
-
-class AgentInstruction(BaseModel):
-    """エージェントへの指示を表すデータモデル"""
-    role: str
-    instructions: str
-    priority: int
-
-class PersonalizedAgentInstruction(BaseModel):
-    """ユーザー固有のエージェント指示を表すデータモデル"""
-    user_id: str
-    patterns: List[UserPattern]
-    base_instructions: List[AgentInstruction]
-    personalized_instructions: str
-    preferred_role: str  # ユーザーに最適な役割
-    updated_at: datetime
-
 class UserProfileRepository:
-    """ユーザープロファイルのリポジトリクラス"""
-    # 役割ごとの基本指示
-    DEFAULT_INSTRUCTIONS = {
-        "code": [
-            AgentInstruction(
-                role="code",
-                instructions="コードの品質と保守性を重視し、適切なエラーハンドリングを含めてください。",
-                priority=1
-            )
-        ],
-        "architect": [
-            AgentInstruction(
-                role="architect",
-                instructions="システム設計の一貫性と拡張性を重視し、詳細な設計ドキュメントを提供してください。",
-                priority=1
-            )
-        ],
-        "ask": [
-            AgentInstruction(
-                role="ask",
-                instructions="質問に対して具体的で実用的な回答を提供し、必要に応じて例を含めてください。",
-                priority=1
-            )
-        ]
-    }
+    """ユーザープロファイル管理リポジトリ"""
+    
+    def __init__(self, db: Optional[firestore.Client] = None):
+        self.db = db or firestore.Client()
+        self._profiles_ref = self.db.collection('user_profiles')
+        self._patterns_ref = self.db.collection('pattern_history')
 
-    def __init__(self, firestore_client):
-        self.firestore_client = firestore_client
-        self.profiles_collection = "user_profiles"
-        self.pattern_history_collection = "pattern_history"
+    def _to_dict(self, obj: BaseModel) -> dict:
+        """BaseModelをdictに変換"""
+        return json.loads(obj.model_dump_json())
 
-    async def get_profile(self, user_id: str) -> Optional[PersonalizedAgentInstruction]:
-        """ユーザープロファイルを取得"""
-        doc_ref = self.firestore_client.collection(self.profiles_collection).document(user_id)
-        doc = doc_ref.get()  # 同期的な操作
-        if not doc.exists:
-            # プロファイルが存在しない場合は、基本指示を含む新しいプロファイルを作成
-            profile = PersonalizedAgentInstruction(
-                user_id=user_id,
-                patterns=[],
-                base_instructions=[],
-                personalized_instructions="",
-                preferred_role="code",  # デフォルトはcodeロール
-                updated_at=datetime.utcnow()
-            )
-            # 各役割の基本指示を追加
-            for role_instructions in self.DEFAULT_INSTRUCTIONS.values():
-                profile.base_instructions.extend(role_instructions)
+    def _from_dict(self, data: dict, model_class: type) -> BaseModel:
+        """dictからBaseModelを生成"""
+        return model_class.model_validate(data)
+
+    async def get_profile(self, user_id: str) -> Optional[UserProfile]:
+        """プロファイルを取得"""
+        try:
+            doc = self._profiles_ref.document(user_id).get()
+            if not doc.exists:
+                # プロファイルが存在しない場合は新規作成
+                new_profile = UserProfile(
+                    user_id=user_id,
+                    patterns=[],
+                    labels=[],
+                    clusters=[],
+                    categories=[],
+                    base_instructions=[],
+                    updated_at=datetime.utcnow()
+                )
+                self._profiles_ref.document(user_id).set(self._to_dict(new_profile))
+                return new_profile
             
-            # 新しいプロファイルを保存
-            await self.save_profile(profile)
-            return profile
-
-        data = doc.to_dict()
-        return PersonalizedAgentInstruction(
-            user_id=user_id,
-            patterns=[UserPattern(**p) for p in data.get("patterns", [])],
-            base_instructions=[AgentInstruction(**i) for i in data.get("base_instructions", [])],
-            personalized_instructions=data.get("personalized_instructions", ""),
-            preferred_role=data.get("preferred_role", "code"),  # デフォルトはcodeロール
-            updated_at=data.get("updated_at", datetime.utcnow())
-        )
-
-    async def save_profile(self, profile: PersonalizedAgentInstruction) -> None:
-        """ユーザープロファイルを保存"""
-        doc_ref = self.firestore_client.collection(self.profiles_collection).document(profile.user_id)
-        doc_ref.set({  # 同期的な操作
-            "patterns": [p.dict() for p in profile.patterns],
-            "base_instructions": [i.dict() for i in profile.base_instructions],
-            "personalized_instructions": profile.personalized_instructions,
-            "preferred_role": profile.preferred_role,
-            "updated_at": profile.updated_at
-        })
+            # 既存のプロファイルを取得
+            profile_data = doc.to_dict()
+            # user_idを追加
+            profile_data['user_id'] = user_id
+            return self._from_dict(profile_data, UserProfile)
+        except Exception as e:
+            logger.error(f"Error getting profile for user {user_id}: {str(e)}")
+            return None
 
     async def add_pattern(self, user_id: str, pattern: UserPattern) -> None:
-        """新しいパターンを追加"""
-        profile = await self.get_profile(user_id)
-        if not profile:
-            profile = PersonalizedAgentInstruction(
-                user_id=user_id,
-                patterns=[pattern],
-                base_instructions=[],
-                personalized_instructions="",
-                preferred_role="code",  # デフォルトはcodeロール
-                updated_at=datetime.utcnow()
+        """パターンを追加"""
+        try:
+            # プロファイルドキュメントを更新
+            profile_ref = self._profiles_ref.document(user_id)
+            
+            # トランザクションで更新
+            @firestore.transactional
+            def update_in_transaction(transaction, prof_ref):
+                prof_doc = prof_ref.get(transaction=transaction)
+                if not prof_doc.exists:
+                    # 新規プロファイル作成
+                    new_profile = UserProfile(
+                        user_id=user_id,
+                        patterns=[pattern],
+                        labels=[],
+                        clusters=[],
+                        categories=[],
+                        base_instructions=[],
+                        updated_at=datetime.utcnow()
+                    )
+                    transaction.set(prof_ref, self._to_dict(new_profile))
+                else:
+                    # 既存パターンを更新または追加
+                    profile_data = prof_doc.to_dict()
+                    patterns = profile_data.get('patterns', [])
+                    pattern_exists = False
+                    
+                    for i, p in enumerate(patterns):
+                        if p['pattern'] == pattern.pattern:
+                            patterns[i] = self._to_dict(pattern)
+                            pattern_exists = True
+                            break
+                    
+                    if not pattern_exists:
+                        patterns.append(self._to_dict(pattern))
+                    
+                    transaction.update(prof_ref, {
+                        'patterns': patterns,
+                        'updated_at': datetime.utcnow()
+                    })
+
+            # トランザクションを実行
+            transaction = self.db.transaction()
+            update_in_transaction(transaction, profile_ref)
+            
+            # パターン履歴に追加
+            self._patterns_ref.document(user_id).collection('patterns').add({
+                'pattern': pattern.pattern,
+                'category': pattern.category,
+                'confidence': pattern.confidence,
+                'observed_at': datetime.utcnow(),
+                'examples': pattern.examples
+            })
+
+        except Exception as e:
+            logger.error(f"Error adding pattern for user {user_id}: {str(e)}")
+            raise
+
+    async def add_label(self, user_id: str, label: DynamicLabel) -> None:
+        """ラベルを追加"""
+        try:
+            profile_ref = self._profiles_ref.document(user_id)
+            
+            @firestore.transactional
+            def update_in_transaction(transaction, prof_ref):
+                prof_doc = prof_ref.get(transaction=transaction)
+                if not prof_doc.exists:
+                    new_profile = UserProfile(
+                        user_id=user_id,
+                        patterns=[],
+                        labels=[label],
+                        clusters=[],
+                        categories=[],
+                        base_instructions=[],
+                        updated_at=datetime.utcnow()
+                    )
+                    transaction.set(prof_ref, self._to_dict(new_profile))
+                else:
+                    profile_data = prof_doc.to_dict()
+                    labels = profile_data.get('labels', [])
+                    label_exists = False
+                    
+                    for i, l in enumerate(labels):
+                        if l['text'] == label.text:
+                            # 既存ラベルを更新
+                            l['occurrence_count'] += 1
+                            l['last_seen'] = datetime.utcnow()
+                            l['context'].extend(label.context)
+                            l['confidence'] = max(l['confidence'], label.confidence)
+                            labels[i] = self._to_dict(label)
+                            label_exists = True
+                            break
+                    
+                    if not label_exists:
+                        labels.append(self._to_dict(label))
+                    
+                    transaction.update(prof_ref, {
+                        'labels': labels,
+                        'updated_at': datetime.utcnow()
+                    })
+
+            transaction = self.db.transaction()
+            update_in_transaction(transaction, profile_ref)
+
+        except Exception as e:
+            logger.error(f"Error adding label for user {user_id}: {str(e)}")
+            raise
+
+    async def update_cluster(self, user_id: str, cluster: LabelCluster) -> None:
+        """クラスターを更新"""
+        try:
+            profile_ref = self._profiles_ref.document(user_id)
+            
+            @firestore.transactional
+            def update_in_transaction(transaction, prof_ref):
+                prof_doc = prof_ref.get(transaction=transaction)
+                if not prof_doc.exists:
+                    new_profile = UserProfile(
+                        user_id=user_id,
+                        patterns=[],
+                        labels=[],
+                        clusters=[cluster],
+                        categories=[],
+                        base_instructions=[],
+                        updated_at=datetime.utcnow()
+                    )
+                    transaction.set(prof_ref, self._to_dict(new_profile))
+                else:
+                    profile_data = prof_doc.to_dict()
+                    clusters = profile_data.get('clusters', [])
+                    cluster_exists = False
+                    
+                    for i, c in enumerate(clusters):
+                        if c['cluster_id'] == cluster.cluster_id:
+                            clusters[i] = self._to_dict(cluster)
+                            cluster_exists = True
+                            break
+                    
+                    if not cluster_exists:
+                        clusters.append(self._to_dict(cluster))
+                    
+                    transaction.update(prof_ref, {
+                        'clusters': clusters,
+                        'updated_at': datetime.utcnow()
+                    })
+
+            transaction = self.db.transaction()
+            update_in_transaction(transaction, profile_ref)
+
+        except Exception as e:
+            logger.error(f"Error updating cluster for user {user_id}: {str(e)}")
+            raise
+
+    async def add_category(self, user_id: str, category: DynamicCategory) -> None:
+        """カテゴリーを追加"""
+        try:
+            profile_ref = self._profiles_ref.document(user_id)
+            
+            @firestore.transactional
+            def update_in_transaction(transaction, prof_ref):
+                prof_doc = prof_ref.get(transaction=transaction)
+                if not prof_doc.exists:
+                    new_profile = UserProfile(
+                        user_id=user_id,
+                        patterns=[],
+                        labels=[],
+                        clusters=[],
+                        categories=[category],
+                        base_instructions=[],
+                        updated_at=datetime.utcnow()
+                    )
+                    transaction.set(prof_ref, self._to_dict(new_profile))
+                else:
+                    profile_data = prof_doc.to_dict()
+                    categories = profile_data.get('categories', [])
+                    category_exists = False
+                    
+                    for i, c in enumerate(categories):
+                        if c['name'] == category.name:
+                            categories[i] = self._to_dict(category)
+                            category_exists = True
+                            break
+                    
+                    if not category_exists:
+                        categories.append(self._to_dict(category))
+                    
+                    transaction.update(prof_ref, {
+                        'categories': categories,
+                        'updated_at': datetime.utcnow()
+                    })
+
+            transaction = self.db.transaction()
+            update_in_transaction(transaction, profile_ref)
+
+        except Exception as e:
+            logger.error(f"Error adding category for user {user_id}: {str(e)}")
+            raise
+
+    async def update_profile_insights(
+        self,
+        user_id: str,
+        insights: ProfileInsightResult
+    ) -> None:
+        """プロファイルの分析結果を更新"""
+        try:
+            await self._profiles_ref.document(user_id).update({
+                'insights': self._to_dict(insights),
+                'updated_at': datetime.utcnow()
+            })
+        except Exception as e:
+            logger.error(f"Error updating insights for user {user_id}: {str(e)}")
+            raise
+
+    async def update_instructions(
+        self,
+        user_id: str,
+        instructions: List[AgentInstruction]
+    ) -> None:
+        """基本指示を更新"""
+        try:
+            await self._profiles_ref.document(user_id).update({
+                'base_instructions': [self._to_dict(i) for i in instructions],
+                'updated_at': datetime.utcnow()
+            })
+        except Exception as e:
+            logger.error(f"Error updating instructions for user {user_id}: {str(e)}")
+            raise
+
+    async def update_personalized_instructions(
+        self,
+        user_id: str,
+        instructions: str
+    ) -> None:
+        """個別化された指示を更新"""
+        try:
+            await self._profiles_ref.document(user_id).update({
+                'personalized_instructions': instructions,
+                'updated_at': datetime.utcnow()
+            })
+        except Exception as e:
+            logger.error(
+                f"Error updating personalized instructions for user {user_id}: {str(e)}"
             )
-            # 各役割の基本指示を追加
-            for role_instructions in self.DEFAULT_INSTRUCTIONS.values():
-                profile.base_instructions.extend(role_instructions)
-        else:
-            # 既存のパターンを更新するか新しいパターンを追加
-            pattern_updated = False
-            for i, p in enumerate(profile.patterns):
-                if p.pattern == pattern.pattern and p.category == pattern.category:
-                    profile.patterns[i] = pattern
-                    pattern_updated = True
-                    break
-            if not pattern_updated:
-                profile.patterns.append(pattern)
-            profile.updated_at = datetime.utcnow()
-
-        await self.save_profile(profile)
-        await self._save_pattern_history(user_id, pattern)
-
-    async def _save_pattern_history(self, user_id: str, pattern: UserPattern) -> None:
-        """パターン履歴を保存"""
-        history_ref = (self.firestore_client
-                      .collection(self.pattern_history_collection)
-                      .document(user_id)
-                      .collection("patterns"))
-        
-        history_ref.add({  # 同期的な操作
-            "pattern": pattern.pattern,
-            "category": pattern.category,
-            "confidence": pattern.confidence,
-            "observed_at": pattern.last_updated,
-            "examples": pattern.examples
-        })
-
-    async def update_instructions(self, user_id: str, instructions: List[AgentInstruction]) -> None:
-        """エージェント指示を更新"""
-        profile = await self.get_profile(user_id)
-        if not profile:
-            profile = PersonalizedAgentInstruction(
-                user_id=user_id,
-                patterns=[],
-                base_instructions=instructions,
-                personalized_instructions="",
-                preferred_role="code",  # デフォルトはcodeロール
-                updated_at=datetime.utcnow()
-            )
-        else:
-            profile.base_instructions = instructions
-            profile.updated_at = datetime.utcnow()
-
-        await self.save_profile(profile)
-
-    async def update_personalized_instructions(self, user_id: str, instructions: str) -> None:
-        """ユーザー固有の指示を更新"""
-        profile = await self.get_profile(user_id)
-        if not profile:
-            profile = PersonalizedAgentInstruction(
-                user_id=user_id,
-                patterns=[],
-                base_instructions=[],
-                personalized_instructions=instructions,
-                preferred_role="code",  # デフォルトはcodeロール
-                updated_at=datetime.utcnow()
-            )
-            # 各役割の基本指示を追加
-            for role_instructions in self.DEFAULT_INSTRUCTIONS.values():
-                profile.base_instructions.extend(role_instructions)
-        else:
-            profile.personalized_instructions = instructions
-            profile.updated_at = datetime.utcnow()
-
-        await self.save_profile(profile)
-
-    async def update_preferred_role(self, user_id: str, role: str) -> None:
-        """ユーザーの優先役割を更新"""
-        if role not in self.DEFAULT_INSTRUCTIONS:
-            raise ValueError(f"Invalid role: {role}")
-        
-        profile = await self.get_profile(user_id)
-        if profile:
-            profile.preferred_role = role
-            profile.updated_at = datetime.utcnow()
-            await self.save_profile(profile)
+            raise

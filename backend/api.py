@@ -428,7 +428,8 @@ async def analyze_user_reflection(
         all_patterns = []
         for content in reflection_contents:
             print(f"Analyzing reflection... {len(content)} characters")
-            patterns = await profile_agent.analyze_reflection(user_id, content)
+            analysis_result = await profile_agent.analyze_reflection(user_id, content)
+            patterns = analysis_result.patterns  # PatternAnalysisResultからpatternsを取得
             print(f"Found patterns in categories: {set(p.category for p in patterns)}")
             for p in patterns:
                 print(f"  - {p.category}: {p.pattern} ({p.confidence})")
