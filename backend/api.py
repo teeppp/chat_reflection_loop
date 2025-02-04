@@ -56,7 +56,7 @@ class ChatRequest(BaseModel):
     thread_id: Optional[str] = None
 
 class CreateChatSessionRequest(BaseModel):
-    initial_message: Optional[Message] = None
+    initial_message: Optional[List[Message]] = None
 
 class GenerateReflectionRequest(BaseModel):
     session_id: str
@@ -96,7 +96,7 @@ async def create_chat_session(
     
     messages = []
     if request.initial_message:
-        messages.append(request.initial_message)
+        messages.extend(request.initial_message)
     
     chat_history = ChatHistory(
         user_id=user_id,
