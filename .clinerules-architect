@@ -1,6 +1,2 @@
 # architect Mode Rules
-- User Personalizeの蘭からユーザーの好みの傾向を加味して方針を立てなさい
-
---- 
-# User Personalize
-- 疎結合にこだわる
+- 実行計画はMarkdown形式に記録すること
