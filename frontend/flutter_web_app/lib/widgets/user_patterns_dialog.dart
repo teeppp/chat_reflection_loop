@@ -241,15 +241,36 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                                     vertical: 4,
                                   ),
                                   child: ListTile(
-                                    title: Text(pattern['pattern'] ?? ''),
-                                    subtitle: Text(
-                                      pattern['examples']?.first ?? '',
-                                      maxLines: 2,
+                                    title: Text(
+                                      pattern['pattern']?.replaceAll(RegExp(r'```markdown\n|```$'), '') ?? '',
+                                      maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
-                                      style: TextStyle(
-                                        color: Theme.of(context).textTheme.bodySmall?.color,
-                                        fontSize: 12,
-                                      ),
+                                    ),
+                                    subtitle: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        SizedBox(height: 4),
+                                        Wrap(
+                                          spacing: 4,
+                                          runSpacing: 4,
+                                          children: (pattern['suggested_labels'] as List<dynamic>? ?? [])
+                                              .map<Widget>((label) => Container(
+                                                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                    decoration: BoxDecoration(
+                                                      color: Theme.of(context).colorScheme.primaryContainer,
+                                                      borderRadius: BorderRadius.circular(12),
+                                                    ),
+                                                    child: Text(
+                                                      label ?? '',
+                                                      style: TextStyle(
+                                                        fontSize: 12,
+                                                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                                                      ),
+                                                    ),
+                                                  ))
+                                              .toList(),
+                                        ),
+                                      ],
                                     ),
                                     trailing: Row(
                                       mainAxisSize: MainAxisSize.min,
