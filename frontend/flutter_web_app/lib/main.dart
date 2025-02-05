@@ -11,6 +11,7 @@ import 'screens/chat_screen.dart';
 import 'screens/debug_chat_screen.dart';
 import 'services/chat_service.dart';
 import 'services/reflection_service.dart';
+import 'config/app_config.dart';
 
 void main() async {
   try {
@@ -20,12 +21,11 @@ void main() async {
       print('Starting application initialization...');
       
       try {
-        print('Loading environment variables...');
-        await dotenv.load(fileName: ".env");
-        print('Environment variables loaded successfully');
-
+        print('Loading configuration...');
+        await AppConfig.load();
+        print('Configuration loaded successfully');
       } catch (e) {
-        print('Error loading environment variables: $e');
+        print('Error loading configuration: $e');
         rethrow;
       }
 
@@ -33,11 +33,11 @@ void main() async {
         print('Initializing Firebase...');
         await Firebase.initializeApp(
           options: FirebaseOptions(
-            apiKey: dotenv.env['FIREBASE_API_KEY'] ?? '',
-            authDomain: dotenv.env['FIREBASE_AUTH_DOMAIN'] ?? '',
-            projectId: dotenv.env['FIREBASE_PROJECT_ID'] ?? '',
-            messagingSenderId: dotenv.env['FIREBASE_MESSAGING_SENDER_ID'] ?? '',
-            appId: dotenv.env['FIREBASE_APP_ID'] ?? '',
+            apiKey: AppConfig.firebaseApiKey,
+            authDomain: AppConfig.firebaseAuthDomain,
+            projectId: AppConfig.firebaseProjectId,
+            messagingSenderId: AppConfig.firebaseMessagingSenderId,
+            appId: AppConfig.firebaseAppId,
           ),
         );
         print('Firebase initialization successful');
@@ -45,9 +45,9 @@ void main() async {
         print('Firebase initialization error: $e');
         rethrow;
       }
-      final apiBaseUrl = dotenv.env['API_BASE_URL'] ?? 'http://localhost:8080';
-      final chatService = ChatService(baseUrl: apiBaseUrl);
-      final reflectionService = ReflectionService(baseUrl: apiBaseUrl);
+
+      final chatService = ChatService(baseUrl: AppConfig.apiBaseUrl);
+      final reflectionService = ReflectionService(baseUrl: AppConfig.apiBaseUrl);
 
       // Firebaseの認証状態を監視し、トークンの変更を検知
       FirebaseAuth.instance.authStateChanges().listen((User? user) async {
@@ -91,7 +91,6 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     print('Building MyApp widget...');
-    final chatService = Provider.of<ChatService>(context);
     return MaterialApp(
       title: 'Flutter Web Demo',
       theme: ThemeData(

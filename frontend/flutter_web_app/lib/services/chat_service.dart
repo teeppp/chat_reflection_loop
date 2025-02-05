@@ -5,7 +5,7 @@ import '../models/thread.dart';
 import '../models/chat_history_entry.dart';
 import '../models/message_response.dart';
 import 'auth_service.dart';
-import 'sse_stream_web.dart';
+import 'sse_stream.dart';
 
 class ChatService {
   /// キャッシュされたスレッド一覧
