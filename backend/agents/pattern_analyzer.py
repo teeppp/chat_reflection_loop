@@ -11,7 +11,8 @@ from .models import (
     PatternCategory,
     PatternAnalysisResult,
     PatternResult,
-    PatternAnalysisResponse
+    PatternAnalysisResponse,
+    DynamicLabel
 )
 
 logger = logging.getLogger(__name__)
@@ -233,7 +234,9 @@ class PatternAnalyzer:
         ]
 
     def _create_result(self, patterns: List[Pattern]) -> PatternAnalysisResult:
-        """分析結果を生成"""
+        """分析結果を生成（パターンは一時的に無効化）"""
         return PatternAnalysisResult(
-            patterns=patterns
+            patterns=[],  # パターン生成を無効化
+            labels=[DynamicLabel(text=p.pattern) for p in patterns],  # パターンをラベルとして扱う
+            clusters=[]  # クラスターは別途生成される
         )
