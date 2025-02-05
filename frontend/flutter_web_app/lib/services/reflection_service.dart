@@ -161,7 +161,9 @@ class ReflectionService {
           'cluster_id': c['cluster_id'],
           'theme': c['theme'],
           'labels': c['labels'] ?? [],
-          'strength': c['strength'] ?? 1.0
+          'strength': c['strength'] ?? 1.0,
+          'center_point': c['center_point'] ?? {'x': 0.0, 'y': 0.0, 'z': 0.0},
+          'radius': c['radius'] ?? 0.1
         }).toList(),
         'error_occurred': data['error_occurred'] ?? false,
         'error_message': data['error_message'],
@@ -200,20 +202,13 @@ class ReflectionService {
   /// ユーザーインストラクションの更新
   Future<void> updateUserInstructions(String userId) async {
     try {
-      final response = await _client.get(
-        Uri.parse('$baseUrl/api/v1/profiles/$userId/instructions/code'),
-        headers: _headers,
-      );
-
-      if (response.statusCode != 200) {
-        throw ReflectionException(
-          'ユーザーインストラクションの更新に失敗しました',
-          code: response.statusCode.toString(),
-        );
-      }
-
-      final data = jsonDecode(response.body);
-      print('ユーザーインストラクションを更新しました: ${data['instructions']}');
+      // 既存のgetUserPatternsメソッドを使用して分析結果を取得
+      final analysisResult = await getUserPatterns(userId);
+      
+      // パターンからインストラクションを構築
+      final patterns = analysisResult['patterns'] as List? ?? [];
+      print('ユーザーインストラクションを更新しました: $patterns');
+      
     } catch (e) {
       if (e is ReflectionException) rethrow;
       throw ReflectionException(

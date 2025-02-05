@@ -331,7 +331,7 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                   final clusters = (data['clusters'] as List).cast<Map<String, dynamic>>();
 
                   return DefaultTabController(
-                    length: 3,
+                    length: 1,  // ラベルのみ表示
                     child: Column(
                       children: [
                         Material(
@@ -342,43 +342,14 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                             indicatorColor: Theme.of(context).colorScheme.primary,
                             tabs: [
                               Tab(text: 'ラベル (${labels.length})'),
-                              Tab(text: 'クラスター (${clusters.length})'),
-                              Tab(text: 'パターン (${patterns.length})'),
                             ],
                           ),
                         ),
                         Expanded(
                           child: TabBarView(
                             children: [
-                              // ラベルビュー
+                              // ラベルビューのみ表示
                               _buildLabelsView(labels),
-                              
-                              // クラスタービュー
-                              _buildClustersView(clusters),
-                              
-                              // パターンビュー
-                              _buildPatternsView(patterns),
-                            ],
-                          ),
-                        ),
-                        const Divider(),
-                        Padding(
-                          padding: const EdgeInsets.all(8.0),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.end,
-                            children: [
-                              TextButton.icon(
-                                onPressed: () {
-                                  showDialog(
-                                    context: context,
-                                    builder: (context) => ReflectionBoardDialog(
-                                      patterns: patterns,
-                                    ),
-                                  );
-                                },
-                                icon: const Icon(Icons.dashboard),
-                                label: const Text('Board形式で表示'),
-                              ),
                             ],
                           ),
                         ),
