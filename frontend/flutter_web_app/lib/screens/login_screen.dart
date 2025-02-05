@@ -122,12 +122,6 @@ class _LoginScreenState extends State<LoginScreen> {
                       : const Text('ログイン'),
                 ),
                 const SizedBox(height: 16),
-                TextButton(
-                  onPressed: () {
-                    Navigator.pushNamed(context, '/signup');
-                  },
-                  child: const Text('アカウントをお持ちでない方はこちら'),
-                ),
               ],
             ),
           ),

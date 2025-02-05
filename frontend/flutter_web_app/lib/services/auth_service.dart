@@ -9,19 +9,12 @@ class AuthService {
   // 現在のユーザーを取得
   User? get currentUser => _auth.currentUser;
 
-  // メール/パスワードでサインアップ
+  // メール/パスワードでサインアップ (無効化)
   Future<UserCredential> signUpWithEmailAndPassword({
     required String email,
     required String password,
   }) async {
-    try {
-      return await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-    } on FirebaseAuthException catch (e) {
-      throw _handleAuthError(e);
-    }
+    throw Exception('セキュリティ上の理由により、サインアップ機能は無効化されています。');
   }
 
   // メール/パスワードでサインイン

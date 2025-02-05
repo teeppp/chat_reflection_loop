@@ -6,7 +6,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
-import 'screens/signup_screen.dart';
 import 'screens/chat_screen.dart';
 import 'screens/debug_chat_screen.dart';
 import 'services/chat_service.dart';
@@ -135,7 +134,6 @@ class MyApp extends StatelessWidget {
               },
             ),
         '/login': (context) => const LoginScreen(),
-        '/signup': (context) => const SignUpScreen(),
         '/home': (context) => ChatScreen(
               chatService: Provider.of<ChatService>(context),
               reflectionService: Provider.of<ReflectionService>(context),
