@@ -574,13 +574,23 @@ async def generate_reflection(
             "reflection": reflection_dict,
             "updated_at": datetime.utcnow()
         }
-        await doc_ref.update(update_data)
-
-        return {
-            "reflection": reflection_dict,
-            "patterns": [p.dict() for p in analysis_result.patterns],
-            "updated_at": update_data["updated_at"]
-        }
+        
+        try:
+            # 非同期を使用せずに更新
+            doc_ref.update(update_data)
+            print("Debug - Reflection data updated successfully")
+            
+            return {
+                "reflection": reflection_dict,
+                "patterns": [p.dict() for p in analysis_result.patterns],
+                "updated_at": update_data["updated_at"]
+            }
+        except Exception as update_error:
+            print(f"Debug - Error updating reflection data: {str(update_error)}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to update reflection data: {str(update_error)}"
+            )
 
     except Exception as e:
         print("Error in generate_reflection:", str(e))
