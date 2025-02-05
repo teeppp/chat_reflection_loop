@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'package:http/http.dart' as http;
 import '../models/thread.dart';
 import '../models/chat_history_entry.dart';
+import '../models/message_response.dart';
 import 'auth_service.dart';
 import 'sse_stream_web.dart';
 
@@ -20,7 +21,7 @@ class ChatService {
        _authService = authService ?? AuthService();
 
   /// 同期的なメッセージ送信
-  Future<String> sendMessage(String message, String threadId) async {
+  Future<MessageResponse> sendMessage(String message, String threadId) async {
     try {
       final token = await _authService.getIdToken();
       if (token == null) throw Exception('認証トークンが取得できません');
@@ -39,13 +40,17 @@ class ChatService {
       );
 
       if (response.statusCode != 200) {
-        throw Exception('API エラー: ${response.statusCode} ${response.body}');
+        return MessageResponse.error('API エラー: ${response.statusCode} ${response.body}');
       }
 
       final Map<String, dynamic> data = jsonDecode(response.body);
-      return data['response'] ?? 'エラー: 応答が空です';
+      final botResponse = data['response'];
+      if (botResponse == null) {
+        return MessageResponse.error('エラー: 応答が空です');
+      }
+      return MessageResponse.success(botResponse);
     } catch (e) {
-      throw Exception('メッセージ送信エラー: $e');
+      return MessageResponse.error('メッセージ送信エラー: $e');
     }
   }
 

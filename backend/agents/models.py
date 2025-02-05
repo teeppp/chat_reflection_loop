@@ -1,6 +1,6 @@
 """共通のデータモデル定義"""
 from enum import Enum
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 from pydantic import BaseModel, Field
 
@@ -41,17 +41,31 @@ class PatternAnalysisResponse(BaseModel):
     """LLMからの応答形式"""
     patterns: List[PatternResult]
 
+class PatternContext(BaseModel):
+    """パターンのコンテキスト情報"""
+    session_id: str
+    title: str
+    summary: str
+    timestamp: datetime
+    excerpt: str
+    metadata: Dict[str, Any] = Field(default_factory=dict)
+
 class Pattern(BaseModel):
     """検出されたパターン（永続化用）"""
     pattern: str
     category: str
     confidence: float = Field(ge=0.0, le=1.0)
-    context: List[str]
+    context: Union[PatternContext, List[str]]
     detected_at: datetime
     detection_method: str
     related_patterns: List[str] = Field(default_factory=list)
     suggested_labels: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
+
+    class Config:
+        json_encoders = {
+            datetime: lambda dt: dt.isoformat()
+        }
 
 class DynamicLabel(BaseModel):
     """動的なプロファイルラベル"""

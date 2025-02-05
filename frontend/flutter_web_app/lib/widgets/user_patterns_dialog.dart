@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'dart:math';
 import '../services/reflection_service.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'reflection_board_dialog.dart';
@@ -16,6 +17,24 @@ class UserPatternsDialog extends StatefulWidget {
 }
 
 class _UserPatternsDialogState extends State<UserPatternsDialog> {
+  String _getContextTitle(dynamic context) {
+    if (context is Map<String, dynamic>) {
+      return context['title'] ?? '不明';
+    } else if (context is List && context.isNotEmpty) {
+      return '過去の振り返り';
+    }
+    return '不明';
+  }
+
+  String _getContextExcerpt(dynamic context) {
+    if (context is Map<String, dynamic>) {
+      return context['excerpt'] ?? '';
+    } else if (context is List && context.isNotEmpty) {
+      return context[0].toString().substring(0, min(context[0].toString().length, 100));
+    }
+    return '';
+  }
+
   late Future<Map<String, dynamic>> _patternsFuture;
 
   @override
@@ -73,10 +92,32 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
             ),
-            subtitle: Text(
-              'カテゴリ: ${pattern['category'] ?? '未分類'}\n'
-              '検出時刻: ${pattern['detected_at'] ?? '不明'}',
+            subtitle: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('カテゴリ: ${pattern['category'] ?? '未分類'}'),
+                if (pattern['context'] != null) ...[
+                  Text(
+                    'セッション: ${_getContextTitle(pattern['context'])}',
+                    style: const TextStyle(
+                      fontStyle: FontStyle.italic,
+                      fontSize: 12,
+                    ),
+                  ),
+                  Text(
+                    _getContextExcerpt(pattern['context']),
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: Theme.of(context).textTheme.bodySmall?.color,
+                    ),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+                Text('検出時刻: ${pattern['detected_at'] ?? '不明'}'),
+              ],
             ),
+            isThreeLine: true,
             trailing: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [

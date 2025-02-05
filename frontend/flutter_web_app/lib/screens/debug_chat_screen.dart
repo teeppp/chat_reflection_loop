@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'dart:async';
 import '../services/chat_service.dart';
 import '../models/thread.dart';
+import '../models/message_response.dart';
 
 class DebugChatScreen extends StatefulWidget {
   final ChatService chatService;
@@ -89,7 +90,10 @@ class _DebugChatScreenState extends State<DebugChatScreen> {
       } else {
         final response = await widget.chatService.sendMessage(text, _currentThread!.id);
         setState(() {
-          _response = response;
+          _response = response.botResponse ?? 'エラー: 応答が空です';
+          if (!response.success) {
+            _showError(response.error ?? 'エラーが発生しました');
+          }
         });
       }
     } catch (e) {

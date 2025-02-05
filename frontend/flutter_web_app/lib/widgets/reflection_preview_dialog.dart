@@ -27,11 +27,42 @@ class _ReflectionPreviewDialogState extends State<ReflectionPreviewDialog> {
     _loadMemo();
   }
 
-  void _loadMemo() {
-    setState(() {
-      _isLoading = true;
+  Future<void> _loadMemo() async {
+    if (mounted) {
+      setState(() => _isLoading = true);
+    }
+
+    try {
       _memoFuture = widget.reflectionService.getReflectionMemo(widget.threadId);
-    });
+      await _memoFuture;
+    } catch (e) {
+      print('振り返りメモの取得に失敗: $e');
+      // 取得失敗時は振り返り更新を試みる
+      try {
+        await widget.reflectionService.updateReflection(
+          threadId: widget.threadId,
+          messageContent: '',  // 空文字で更新を要求
+          isUserMessage: false,
+        );
+        // 更新後に再度取得を試みる
+        if (mounted) {
+          setState(() {
+            _memoFuture = widget.reflectionService.getReflectionMemo(widget.threadId);
+          });
+        }
+      } catch (updateError) {
+        print('振り返りの更新に失敗: $updateError');
+        if (mounted) {
+          setState(() {
+            _memoFuture = Future.error('振り返りメモの生成に失敗しました');
+          });
+        }
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isLoading = false);
+      }
+    }
   }
 
   @override

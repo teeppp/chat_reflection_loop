@@ -24,7 +24,8 @@ class UserPattern(BaseModel):
     category: str
     confidence: float
     last_updated: datetime
-    examples: List[str]
+    context: Optional[dict] = None
+    examples: Optional[List[str]] = None  # 後方互換性のため残す
 
 class UserProfileRepository:
     """ユーザープロファイル管理リポジトリ"""
@@ -71,11 +72,21 @@ class UserProfileRepository:
             normalized_patterns = []
             for p in patterns:
                 try:
+                    # コンテキストデータの正規化
+                    context = p.get('context', {})
+                    if isinstance(context, list):
+                        # 古い形式のデータを新形式に変換
+                        context = {
+                            "title": "過去の振り返り",
+                            "timestamp": datetime.fromisoformat(p.get('detected_at').replace('Z', '+00:00')) if isinstance(p.get('detected_at'), str) else p.get('detected_at', datetime.utcnow()).isoformat() if isinstance(p.get('detected_at'), datetime) else datetime.utcnow().isoformat(),
+                            "excerpt": context[0][:100] if context else ""
+                        }
+
                     normalized_pattern = {
                         "pattern": p.get('pattern', ''),
                         "category": p.get('category', 'behavioral'),
                         "confidence": float(p.get('confidence', 0.5)),
-                        "context": p.get('context', []),
+                        "context": context,
                         "detected_at": p.get('detected_at', datetime.utcnow()),
                         "detection_method": p.get('detection_method', 'analysis'),
                         "examples": p.get('examples', [])
@@ -124,10 +135,10 @@ class UserProfileRepository:
                             "category": pattern.category,
                             "confidence": pattern.confidence,
                             "last_updated": pattern.last_updated,
-                            "examples": pattern.examples,
+                            "examples": pattern.examples or [],
                             "detected_at": datetime.utcnow(),
                             "detection_method": "analysis",
-                            "context": pattern.examples
+                            "context": pattern.context or {}
                         }],
                         labels=[],
                         clusters=[],
@@ -150,10 +161,14 @@ class UserProfileRepository:
                         "category": pattern.category,
                         "confidence": pattern.confidence,
                         "last_updated": pattern.last_updated,
-                        "examples": pattern.examples,
+                        "examples": pattern.examples or [],
                         "detected_at": now,
                         "detection_method": "analysis",
-                        "context": pattern.examples or []
+                        "context": pattern.context or {
+                            "title": "振り返りメモ",
+                            "timestamp": now.isoformat(),
+                            "excerpt": pattern.examples[0][:100] if pattern.examples and pattern.examples[0] else ""
+                        }
                     }
                     
                     for i, p in enumerate(patterns):

@@ -71,22 +71,83 @@ class ProfileAgent:
         import hashlib
         return hashlib.sha256(content.encode()).hexdigest()
 
-    def _convert_to_user_pattern(self, pattern: Pattern) -> UserPattern:
+    async def _get_session_info(self, session_id: str) -> Optional[Dict[str, Any]]:
+        """チャットセッション情報を取得"""
+        try:
+            doc = self.repository.db.collection("chat_histories").document(session_id).get()
+            if doc.exists:
+                data = doc.to_dict()
+                return {
+                    'title': data.get('title', '不明なセッション'),
+                    'created_at': data.get('created_at', datetime.utcnow()),
+                    'reflection': data.get('reflection', {}).get('content', '')
+                }
+        except Exception as e:
+            logger.error(f"セッション情報取得エラー: {e}")
+        return None
+
+    def _convert_to_user_pattern(self, pattern: Pattern, session_info: Optional[Dict[str, Any]] = None) -> UserPattern:
         """PatternをUserPatternに変換（バリデーション付き）"""
         try:
-            # コンテキストデータの取得
-            context_data = []
+            # コンテキストデータの取得と変換
+            context_data = {}
+
             if hasattr(pattern, 'context') and pattern.context:
-                context_data = pattern.context
-            elif hasattr(pattern, 'examples') and pattern.examples:
-                context_data = pattern.examples
+                if isinstance(pattern.context, (dict, list)):
+                    # 古い形式のデータを新しい形式に変換
+                    if isinstance(pattern.context, list):
+                        # リスト形式の古いデータ
+                        context_str = pattern.context[0] if pattern.context else ""
+                        context_data = {
+                            'session_id': 'legacy_session',
+                            'title': '過去の振り返り',
+                            'summary': context_str,
+                            'timestamp': datetime.utcnow().isoformat(),
+                            'excerpt': context_str[:100] if context_str else ''
+                        }
+                    else:
+                        # 辞書形式の古いデータ（必須フィールドを確実に含める）
+                        context_data = {
+                            'session_id': pattern.context.get('session_id', 'legacy_session'),
+                            'title': pattern.context.get('title', '過去の振り返り'),
+                            'summary': pattern.context.get('summary', ''),
+                            'timestamp': pattern.context.get('timestamp', datetime.utcnow().isoformat()),
+                            'excerpt': pattern.context.get('excerpt', '')
+                        }
+                else:
+                    # PatternContextオブジェクトから変換
+                    context_data = {
+                        'session_id': pattern.context.session_id,
+                        'title': pattern.context.title,
+                        'summary': pattern.context.summary,
+                        'timestamp': pattern.context.timestamp.isoformat(),
+                        'excerpt': pattern.context.excerpt
+                    }
+            elif session_info:
+                # セッション情報から新規コンテキストを作成
+                context_data = {
+                    'session_id': session_info.get('session_id', 'new_session'),
+                    'title': session_info.get('title', '新規セッション'),
+                    'summary': session_info.get('reflection', '')[:200],
+                    'timestamp': session_info.get('created_at', datetime.utcnow()).isoformat(),
+                    'excerpt': session_info.get('reflection', '')[:100]
+                }
+            else:
+                # デフォルトコンテキスト
+                context_data = {
+                    'session_id': 'default_session',
+                    'title': 'デフォルトセッション',
+                    'summary': '',
+                    'timestamp': datetime.utcnow().isoformat(),
+                    'excerpt': ''
+                }
 
             return UserPattern(
                 pattern=pattern.pattern,
                 category=pattern.category or "behavioral",
                 confidence=pattern.confidence or 0.5,
                 last_updated=pattern.detected_at or datetime.utcnow(),
-                examples=context_data
+                context=context_data
             )
         except Exception as e:
             logger.error(f"Pattern conversion error: {str(e)}, pattern: {pattern}")
@@ -103,7 +164,8 @@ class ProfileAgent:
     async def analyze_reflection(
         self,
         user_id: str,
-        reflection_content: str
+        reflection_content: str,
+        session_id: Optional[str] = None
     ) -> PatternAnalysisResult:
         """振り返りからパターンを分析（差分チェック付き）"""
         try:
@@ -118,6 +180,12 @@ class ProfileAgent:
             if last and last.content_hash == content_hash:
                 logger.info("キャッシュされた分析結果を使用")
                 return last.result
+
+            # セッション情報を取得
+            session_info = None
+            if session_id:
+                session_info = await self._get_session_info(session_id)
+                logger.info(f"セッション情報を取得: {session_info}")
 
             # 動的パターン分析を実行
             analysis_result = await self.pattern_engine.analyze_pattern(reflection_content)
@@ -136,12 +204,25 @@ class ProfileAgent:
                     if not p.pattern:  # 空のパターンは除外
                         continue
                     try:
+                        # パターンのコンテキストを作成
+                        pattern_context = PatternContext(
+                            session_id=session_id or "unknown",
+                            title=session_info['title'] if session_info else "不明なセッション",
+                            summary=reflection_content[:200],  # 振り返りの冒頭を要約として使用
+                            timestamp=timestamp,
+                            excerpt=reflection_content[:100] if reflection_content else '',
+                            metadata={
+                                'source': 'reflection_analysis',
+                                'pattern_type': p.category or 'behavioral'
+                            }
+                        )
+
                         # Patternモデルに変換（必須フィールドを設定）
                         pattern = Pattern(
                             pattern=p.pattern,
                             category=p.category or "behavioral",
                             confidence=p.confidence,
-                            context=p.context or [reflection_content[:200]],  # デフォルトコンテキスト
+                            context=pattern_context,
                             detected_at=timestamp,
                             detection_method="llm_analysis"
                         )
@@ -268,6 +349,7 @@ class ProfileAgent:
         self,
         user_id: str
     ) -> Optional[PatternAnalysisResult]:
+        """保存された分析結果を取得（レガシーデータ対応）"""
         """保存された分析結果を取得"""
         try:
             logger.info(f"プロファイル分析結果の取得開始: {user_id}")
@@ -290,13 +372,37 @@ class ProfileAgent:
             patterns = []
             for p in profile.patterns:
                 try:
+                    # レガシーデータのコンテキスト変換
+                    pattern_context = None
+                    if isinstance(p.context, dict):
+                        # 新しい形式のデータ
+                        pattern_context = PatternContext(
+                            session_id=p.context.get('session_id', 'legacy'),
+                            title=p.context.get('title', '過去の振り返り'),
+                            summary=p.context.get('summary', ''),
+                            timestamp=datetime.utcnow(),
+                            excerpt=p.context.get('excerpt', ''),
+                            metadata=p.context.get('metadata', {})
+                        )
+                    else:
+                        # レガシーデータを変換
+                        context_text = p.context[0] if isinstance(p.context, list) and p.context else str(p.context) if p.context else ''
+                        pattern_context = PatternContext(
+                            session_id='legacy',
+                            title='過去の振り返り',
+                            summary=context_text,
+                            timestamp=datetime.utcnow(),
+                            excerpt=context_text[:100] if context_text else '',
+                            metadata={'legacy_data': True}
+                        )
+
                     pattern = Pattern(
                         pattern=p.pattern,
                         category=p.category,
                         confidence=p.confidence,
-                        detected_at=datetime.utcnow(),  # 現在時刻を使用
+                        detected_at=datetime.utcnow(),
                         detection_method="analysis",
-                        context=p.context or p.examples or [] # contextまたはexamplesを使用
+                        context=pattern_context
                     )
                     patterns.append(pattern)
                     logger.info(f"パターン読み込み成功: {pattern.pattern}")

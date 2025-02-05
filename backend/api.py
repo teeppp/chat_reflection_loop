@@ -562,10 +562,11 @@ async def generate_reflection(
         reflection.user_id = token["uid"]
         reflection_dict = reflection.to_dict()
 
-        # 振り返りを分析
+        # セッションIDが提供されている場合、そのセッションの振り返りを分析
         analysis_result = await profile_agent.analyze_reflection(
             token["uid"],
-            reflection.content
+            reflection.content,
+            session_id=reflection.session_id
         )
 
         # 振り返り情報とタイムスタンプを更新

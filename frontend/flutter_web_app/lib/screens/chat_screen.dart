@@ -4,6 +4,7 @@ import 'dart:async';
 import '../services/chat_service.dart';
 import '../models/thread.dart';
 import '../models/chat_history_entry.dart';
+import '../models/message_response.dart';
 import '../services/reflection_service.dart';
 import '../widgets/reflection_preview_dialog.dart';
 import '../widgets/user_patterns_dialog.dart';
@@ -150,8 +151,19 @@ class _ChatScreenState extends State<ChatScreen> {
       await _createNewThread();
     }
 
+    final messageText = text;
     _messageController.clear();
-    setState(() => _isLoading = true);
+
+    // ユーザーメッセージを即時表示
+    final userMessage = ChatMessage(
+      text: messageText,
+      isMe: true,
+      timestamp: DateTime.now(),
+    );
+    setState(() {
+      _messages.insert(0, userMessage);
+      _isLoading = true;
+    });
 
     try {
       if (_currentThread == null) {
@@ -159,42 +171,66 @@ class _ChatScreenState extends State<ChatScreen> {
       }
 
       // メッセージを送信（バックエンドで自動的に履歴に追加される）
-      await widget.chatService.sendMessage(text, _currentThread!.id);
+      final response = await widget.chatService.sendMessage(messageText, _currentThread!.id);
       
+      // ボットの応答を即時表示
+      if (response.botResponse != null) {
+        final botMessage = ChatMessage(
+          text: response.botResponse!,
+          isMe: false,
+          timestamp: DateTime.now(),
+        );
+        setState(() {
+          _messages.insert(0, botMessage);
+        });
+      }
+
+      // バックグラウンドで振り返りの更新を実行
+      _updateReflectionsInBackground(
+        userMessage: messageText,
+        botResponse: response.botResponse,
+      );
+
+    } catch (e) {
+      _showError('エラー: $e');
+      // エラー時はユーザーメッセージを削除
+      setState(() {
+        _messages.remove(userMessage);
+      });
+    } finally {
+      setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _updateReflectionsInBackground({
+    required String userMessage,
+    String? botResponse,
+  }) async {
+    try {
       // ユーザーメッセージの振り返り更新
       await widget.reflectionService.updateReflection(
         threadId: _currentThread!.id,
-        messageContent: text,
+        messageContent: userMessage,
         isUserMessage: true,
       );
-      
-      // 履歴を読み込んで表示を更新
-      await _loadChatHistory();
 
-      // ボットの応答に対する振り返り更新とユーザーインストラクション更新
-      if (_messages.isNotEmpty && !_messages.first.isMe) {
-        try {
-          // 振り返りを生成
-          await widget.reflectionService.updateReflection(
-            threadId: _currentThread!.id,
-            messageContent: _messages.first.text,
-            isUserMessage: false,
-          );
-          
-          // Firebaseから現在のユーザーIDを取得
-          final user = FirebaseAuth.instance.currentUser;
-          if (user != null) {
-            // ユーザーインストラクションを更新
-            await widget.reflectionService.updateUserInstructions(user.uid);
-          }
-        } catch (e) {
-          print('振り返りまたはユーザーインストラクションの更新に失敗: $e');
+      if (botResponse != null) {
+        // ボットの応答に対する振り返り更新
+        await widget.reflectionService.updateReflection(
+          threadId: _currentThread!.id,
+          messageContent: botResponse,
+          isUserMessage: false,
+        );
+
+        // Firebaseから現在のユーザーIDを取得してインストラクションを更新
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          await widget.reflectionService.updateUserInstructions(user.uid);
         }
       }
     } catch (e) {
-      _showError('エラー: $e');
-    } finally {
-      setState(() => _isLoading = false);
+      print('バックグラウンドでの振り返り更新に失敗: $e');
+      // バックグラウンド処理のため、ユーザーにエラーは表示しない
     }
   }
 
