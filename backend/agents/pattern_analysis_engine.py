@@ -18,7 +18,8 @@ from .models import (
     LabelCluster,
     DynamicCategory,
     DynamicPatternEngine,
-    PatternAnalysisResult
+    PatternAnalysisResult,
+    PatternContext
 )
 from .llm_schemas import DynamicLabelAnalysis
 
@@ -76,19 +77,33 @@ class PatternAnalysisEngine:
             # クラスタリングを実行
             clusters = await self._cluster_labels(vectorized_labels) if labels else []
             
-            # パターンを生成
-            pattern = Pattern(
-                pattern=content,
-                category="dynamic",  # 動的カテゴリー
-                confidence=1.0,
-                context=[content],
-                detected_at=datetime.utcnow(),
-                detection_method="dynamic_analysis",
-                suggested_labels=[label.text for label in labels]
+            # パターンコンテキストを作成
+            pattern_context = PatternContext(
+                session_id="dynamic",
+                title="Dynamic Pattern Analysis",
+                summary=content[:100],  # 最初の100文字をサマリーとして使用
+                timestamp=datetime.utcnow(),
+                excerpt=content,
+                metadata={"source": "dynamic_analysis"}
             )
 
+            # パターン分析を実行
+            patterns = []
+            for label in labels:
+                pattern = Pattern(
+                    pattern=label.text,  # ラベルをパターンとして使用
+                    category="dynamic",  # 動的カテゴリー
+                    confidence=label.confidence,
+                    context=pattern_context,
+                    detected_at=datetime.utcnow(),
+                    detection_method="dynamic_analysis",
+                    related_patterns=[l.text for l in labels if l.text != label.text],
+                    suggested_labels=[l.text for l in labels]
+                )
+                patterns.append(pattern)
+
             return PatternAnalysisResult(
-                patterns=[pattern],
+                patterns=patterns,  # パターンのリストを返す
                 labels=labels,
                 clusters=clusters
             )
@@ -180,49 +195,63 @@ class PatternAnalysisEngine:
             # ベクトルを行列に変換
             vectors = np.array([vl.vector for vl in vectorized_labels.values()])
             
-            # DBSCANでクラスタリング
+            # クラスタリングのデバッグログ
+            logger.info(f"Clustering {len(vectorized_labels)} labels")
+            logger.info(f"Vectors shape: {vectors.shape}")
+
+            # DBSCANでクラスタリング - パラメータを調整
             clustering = DBSCAN(
-                eps=1 - self.config.clustering_threshold,
-                min_samples=2,
+                eps=0.5,  # より緩い閾値
+                min_samples=1,  # 最小サンプル数を1に
                 metric='euclidean'
             ).fit(vectors)
+            
+            # クラスタリング結果のデバッグログ
+            logger.info(f"Clustering labels: {clustering.labels_}")
             
             # クラスターを生成
             clusters = defaultdict(list)
             for label_text, label_cluster in zip(vectorized_labels.keys(), clustering.labels_):
-                if label_cluster >= 0:  # -1はノイズポイント
-                    clusters[str(label_cluster)].append(label_text)
+                clusters[str(label_cluster)].append(label_text)
+            
+            # クラスター生成のデバッグログ
+            logger.info(f"Creating clusters from {len(clusters)} groups")
             
             # LabelClusterオブジェクトを作成
             result_clusters = []
             for cluster_id, label_texts in clusters.items():
-                # クラスターの中心を計算（スカラー値）
-                cluster_vectors = [
-                    vectorized_labels[label_text].vector[0]
-                    for label_text in label_texts
-                ]
-                center = float(np.mean(cluster_vectors))
+                logger.info(f"Processing cluster {cluster_id} with {len(label_texts)} labels")
                 
-                # クラスターの半径を計算
-                radius = float(max(abs(center - v) for v in cluster_vectors))
-                
-                # center_pointをモデルの形式に合わせて保存
-                center_point = {
-                    "x": center,  # x座標として保存
-                    "y": 0.0,    # y座標（未使用）
-                    "z": 0.0     # z座標（未使用）
-                }
-                
-                result_clusters.append(
-                    LabelCluster(
+                try:
+                    # クラスターの中心を計算
+                    cluster_vectors = [
+                        vectorized_labels[label_text].vector[0]
+                        for label_text in label_texts
+                    ]
+                    center = float(np.mean(cluster_vectors))
+                    radius = float(max(abs(center - v) for v in cluster_vectors)) if len(cluster_vectors) > 1 else 0.1
+                    
+                    # center_pointをモデルの形式に合わせて保存
+                    center_point = {
+                        "x": center,
+                        "y": 0.0,
+                        "z": 0.0
+                    }
+                    
+                    cluster = LabelCluster(
                         cluster_id=f"cluster_{cluster_id}",
                         theme=self._generate_cluster_theme(label_texts),
                         labels=label_texts,
-                        strength=1.0 - radius,
+                        strength=1.0,  # 固定値を使用
                         center_point=center_point,
                         radius=radius
                     )
-                )
+                    result_clusters.append(cluster)
+                    logger.info(f"Created cluster: {cluster.model_dump_json()}")
+                    
+                except Exception as e:
+                    logger.error(f"Error creating cluster {cluster_id}: {str(e)}")
+                    continue
             
             return result_clusters
             

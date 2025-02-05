@@ -19,7 +19,8 @@ from agents.models import (
     DynamicCategory,
     DynamicPatternEngine,
     PatternAnalysisResult,
-    ProfileInsightResult
+    ProfileInsightResult,
+    PatternContext
 )
 
 from repositories.user_profile_repository import (
