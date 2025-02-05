@@ -16,7 +16,7 @@ class UserPatternsDialog extends StatefulWidget {
 }
 
 class _UserPatternsDialogState extends State<UserPatternsDialog> {
-  late Future<List<Map<String, dynamic>>> _patternsFuture;
+  late Future<Map<String, dynamic>> _patternsFuture;
 
   @override
   void initState() {
@@ -53,36 +53,113 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
     return grouped;
   }
 
-  // カテゴリごとのアイコンを取得
-  IconData _getCategoryIcon(String category) {
-    switch (category.toLowerCase()) {
-      case 'information_gathering':
-        return Icons.search;
-      case 'communication':
-        return Icons.chat;
-      case 'problem_solving':
-        return Icons.psychology;
-      case 'learning':
-        return Icons.school;
-      default:
-        return Icons.person_outline;
+  // パターンビューを構築
+  Widget _buildPatternsView(List<Map<String, dynamic>> patterns) {
+    if (patterns.isEmpty) {
+      return const Center(
+        child: Text('パターンはまだ分析されていません'),
+      );
     }
+
+    return ListView.builder(
+      itemCount: patterns.length,
+      itemBuilder: (context, index) {
+        final pattern = patterns[index];
+        return Card(
+          margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+          child: ListTile(
+            title: Text(
+              pattern['pattern'] ?? '',
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+            subtitle: Text(
+              'カテゴリ: ${pattern['category'] ?? '未分類'}\n'
+              '検出時刻: ${pattern['detected_at'] ?? '不明'}',
+            ),
+            trailing: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Text(
+                  '${((pattern['confidence'] as num? ?? 0) * 100).toStringAsFixed(0)}%',
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: _getConfidenceColor(pattern['confidence'] ?? 0),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
   }
 
-  // カテゴリの表示名を取得
-  String _getCategoryDisplayName(String category) {
-    switch (category.toLowerCase()) {
-      case 'information_gathering':
-        return '情報収集スタイル';
-      case 'communication':
-        return 'コミュニケーションパターン';
-      case 'problem_solving':
-        return '問題解決アプローチ';
-      case 'learning':
-        return '学習・成長パターン';
-      default:
-        return 'その他の特徴';
+  // ラベルビューを構築
+  Widget _buildLabelsView(List<Map<String, dynamic>> labels) {
+    if (labels.isEmpty) {
+      return const Center(
+        child: Text('ラベルはまだ分析されていません'),
+      );
     }
+
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: labels.map((label) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.primaryContainer,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Text(
+            label['text'] ?? '',
+            style: TextStyle(
+              color: Theme.of(context).colorScheme.onPrimaryContainer,
+            ),
+          ),
+        );
+      }).toList(),
+    );
+  }
+
+  // クラスタービューを構築
+  Widget _buildClustersView(List<Map<String, dynamic>> clusters) {
+    if (clusters.isEmpty) {
+      return const Center(
+        child: Text('クラスターはまだ分析されていません'),
+      );
+    }
+
+    return ListView.builder(
+      itemCount: clusters.length,
+      itemBuilder: (context, index) {
+        final cluster = clusters[index];
+        return ExpansionTile(
+          title: Text(cluster['theme'] ?? 'クラスター ${index + 1}'),
+          subtitle: Text('強度: ${((cluster['strength'] as num? ?? 0) * 100).toStringAsFixed(0)}%'),
+          children: [
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Wrap(
+                spacing: 8,
+                runSpacing: 8,
+                children: (cluster['labels'] as List? ?? []).map<Widget>((label) {
+                  return Chip(
+                    label: Text(label.toString()),
+                    backgroundColor: Theme.of(context).colorScheme.secondaryContainer,
+                    labelStyle: TextStyle(
+                      color: Theme.of(context).colorScheme.onSecondaryContainer,
+                    ),
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   // 確信度に応じた色を取得
@@ -138,7 +215,7 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
             ),
             const Divider(),
             Expanded(
-              child: FutureBuilder<List<Map<String, dynamic>>>(
+              child: FutureBuilder<Map<String, dynamic>>(
                 future: _patternsFuture,
                 builder: (context, snapshot) {
                   if (snapshot.connectionState == ConnectionState.waiting) {
@@ -150,11 +227,7 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          const Icon(
-                            Icons.error_outline,
-                            color: Colors.red,
-                            size: 48,
-                          ),
+                          const Icon(Icons.error_outline, color: Colors.red, size: 48),
                           const SizedBox(height: 16),
                           Text(
                             'エラーが発生しました：\n${snapshot.error}',
@@ -171,7 +244,9 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                     );
                   }
 
-                  if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                  if (!snapshot.hasData ||
+                      (snapshot.data!['patterns'] as List).isEmpty &&
+                      (snapshot.data!['labels'] as List).isEmpty) {
                     return Center(
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
@@ -209,161 +284,65 @@ class _UserPatternsDialogState extends State<UserPatternsDialog> {
                   }
 
                   // パターンをカテゴリごとにグループ化して確信度でソート
-                  final patternsByCategory = _groupPatternsByCategory(snapshot.data!);
-                  return Column(
-                    children: [
-                      Expanded(
-                        child: ListView.builder(
-                          itemCount: patternsByCategory.length,
-                          itemBuilder: (context, index) {
-                            final category = patternsByCategory.keys.elementAt(index);
-                            final patterns = patternsByCategory[category]!;
-                            
-                            return ExpansionTile(
-                              title: Row(
-                                children: [
-                                  Icon(_getCategoryIcon(category), size: 24),
-                                  const SizedBox(width: 8),
-                                  Text(
-                                    _getCategoryDisplayName(category),
-                                    style: const TextStyle(
-                                      fontWeight: FontWeight.bold,
-                                      fontSize: 16,
+                  final data = snapshot.data!;
+                  final patterns = (data['patterns'] as List).cast<Map<String, dynamic>>();
+                  final labels = (data['labels'] as List).cast<Map<String, dynamic>>();
+                  final clusters = (data['clusters'] as List).cast<Map<String, dynamic>>();
+
+                  return DefaultTabController(
+                    length: 3,
+                    child: Column(
+                      children: [
+                        Material(
+                          color: Theme.of(context).colorScheme.surface,
+                          child: TabBar(
+                            labelColor: Theme.of(context).colorScheme.primary,
+                            unselectedLabelColor: Theme.of(context).colorScheme.onSurface.withOpacity(0.6),
+                            indicatorColor: Theme.of(context).colorScheme.primary,
+                            tabs: [
+                              Tab(text: 'ラベル (${labels.length})'),
+                              Tab(text: 'クラスター (${clusters.length})'),
+                              Tab(text: 'パターン (${patterns.length})'),
+                            ],
+                          ),
+                        ),
+                        Expanded(
+                          child: TabBarView(
+                            children: [
+                              // ラベルビュー
+                              _buildLabelsView(labels),
+                              
+                              // クラスタービュー
+                              _buildClustersView(clusters),
+                              
+                              // パターンビュー
+                              _buildPatternsView(patterns),
+                            ],
+                          ),
+                        ),
+                        const Divider(),
+                        Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.end,
+                            children: [
+                              TextButton.icon(
+                                onPressed: () {
+                                  showDialog(
+                                    context: context,
+                                    builder: (context) => ReflectionBoardDialog(
+                                      patterns: patterns,
                                     ),
-                                  ),
-                                ],
+                                  );
+                                },
+                                icon: const Icon(Icons.dashboard),
+                                label: const Text('Board形式で表示'),
                               ),
-                              initiallyExpanded: true,
-                              children: patterns.map((pattern) {
-                                return Card(
-                                  margin: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 4,
-                                  ),
-                                  child: ListTile(
-                                    title: Text(
-                                      pattern['pattern']?.replaceAll(RegExp(r'```markdown\n|```$'), '') ?? '',
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                    ),
-                                    subtitle: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        SizedBox(height: 4),
-                                        Wrap(
-                                          spacing: 4,
-                                          runSpacing: 4,
-                                          children: (pattern['suggested_labels'] as List<dynamic>? ?? [])
-                                              .map<Widget>((label) => Container(
-                                                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                                    decoration: BoxDecoration(
-                                                      color: Theme.of(context).colorScheme.primaryContainer,
-                                                      borderRadius: BorderRadius.circular(12),
-                                                    ),
-                                                    child: Text(
-                                                      label ?? '',
-                                                      style: TextStyle(
-                                                        fontSize: 12,
-                                                        color: Theme.of(context).colorScheme.onPrimaryContainer,
-                                                      ),
-                                                    ),
-                                                  ))
-                                              .toList(),
-                                        ),
-                                      ],
-                                    ),
-                                    trailing: Row(
-                                      mainAxisSize: MainAxisSize.min,
-                                      children: [
-                                        Container(
-                                          width: 60,
-                                          child: Column(
-                                            mainAxisAlignment: MainAxisAlignment.center,
-                                            children: [
-                                              Text(
-                                                '${(pattern['confidence'] * 100).toStringAsFixed(0)}%',
-                                                style: TextStyle(
-                                                  fontWeight: FontWeight.bold,
-                                                  color: _getConfidenceColor(pattern['confidence']),
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ),
-                                        IconButton(
-                                          icon: const Icon(Icons.info_outline),
-                                          tooltip: '詳細を表示',
-                                          onPressed: () {
-                                            // TODO: 詳細表示ダイアログを表示
-                                            showDialog(
-                                              context: context,
-                                              builder: (context) => AlertDialog(
-                                                title: Text(pattern['pattern'] ?? ''),
-                                                content: SingleChildScrollView(
-                                                  child: Column(
-                                                    mainAxisSize: MainAxisSize.min,
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: [
-                                                      Text(
-                                                        '関連する振り返り:',
-                                                        style: Theme.of(context).textTheme.titleMedium,
-                                                      ),
-                                                      const SizedBox(height: 8),
-                                                      ...pattern['examples'].map<Widget>((example) =>
-                                                        Padding(
-                                                          padding: const EdgeInsets.only(bottom: 8),
-                                                          child: Card(
-                                                            child: Padding(
-                                                              padding: const EdgeInsets.all(8),
-                                                              child: Text(example),
-                                                            ),
-                                                          ),
-                                                        )
-                                                      ).toList(),
-                                                    ],
-                                                  ),
-                                                ),
-                                                actions: [
-                                                  TextButton(
-                                                    onPressed: () => Navigator.of(context).pop(),
-                                                    child: const Text('閉じる'),
-                                                  ),
-                                                ],
-                                              ),
-                                            );
-                                          },
-                                        ),
-                                      ],
-                                    ),
-                                  ),
-                                );
-                              }).toList(),
-                            );
-                          },
+                            ],
+                          ),
                         ),
-                      ),
-                      const Divider(),
-                      Padding(
-                        padding: const EdgeInsets.all(8.0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            TextButton.icon(
-                              onPressed: () {
-                                showDialog(
-                                  context: context,
-                                  builder: (context) => ReflectionBoardDialog(
-                                    patterns: snapshot.data!,
-                                  ),
-                                );
-                              },
-                              icon: const Icon(Icons.dashboard),
-                              label: const Text('Board形式で表示'),
-                            ),
-                          ],
-                        ),
-                      ),
-                    ],
+                      ],
+                    ),
                   );
                 },
               ),

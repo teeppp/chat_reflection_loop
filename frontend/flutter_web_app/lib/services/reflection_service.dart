@@ -1,4 +1,5 @@
 import 'dart:convert' show jsonEncode, jsonDecode, utf8;
+import 'dart:math' show min;
 import 'package:http/http.dart' as http;
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 
@@ -41,6 +42,43 @@ class ReflectionService {
     };
   }
 
+  /// ユーザーの傾向を更新（分析を実行）
+  Future<void> analyzeUserPatterns(
+    String userId, {
+    String? content,
+    bool forceUpdate = false,
+  }) async {
+    try {
+      print('ユーザー傾向分析を開始: $userId');
+      print('振り返り内容: ${content != null ? content.substring(0, min(100, content.length)) : "なし"}');
+
+      // 振り返りノートの分析を要求
+      final response = await _client.post(
+        Uri.parse('$baseUrl/api/v1/profiles/$userId/analyze'),
+        headers: _headers,
+        body: jsonEncode({
+          'content': content,
+          'force_update': forceUpdate,
+        }),
+      );
+
+      print('分析レスポンス: ${utf8.decode(response.bodyBytes)}');
+
+      if (response.statusCode != 200) {
+        throw ReflectionException(
+          'ユーザー傾向の分析に失敗しました',
+          code: response.statusCode.toString(),
+        );
+      }
+
+      // 分析完了後、結果を取得
+      await getUserPatterns(userId);
+    } catch (e) {
+      if (e is ReflectionException) rethrow;
+      throw ReflectionException('ユーザー傾向の分析中にエラーが発生しました: $e');
+    }
+  }
+
   /// 振り返りの更新
   Future<void> updateReflection({
     required String threadId,
@@ -74,28 +112,16 @@ class ReflectionService {
     }
   }
 
-  /// 振り返りメモの取得
-  /// ユーザーの傾向を取得（振り返りノートから分析）
-  Future<List<Map<String, dynamic>>> getUserPatterns(String userId) async {
+  /// ユーザープロファイル分析結果を取得
+  Future<Map<String, dynamic>> getUserPatterns(String userId) async {
     try {
-      print('ユーザー傾向分析を開始: $userId');
+      print('ユーザー傾向分析を取得: $userId');
 
-      // 振り返りノートの分析を要求
-      final response = await _client.post(
-        Uri.parse('$baseUrl/api/v1/profiles/$userId/analyze-reflection'),
-        headers: {
-          ..._headers,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode({
-          'content': '',  // 空のコンテンツ（バックエンドで振り返りを取得）
-          'analyze_type': 'all_reflections',  // 全ての振り返りノートを分析
-          'task_name': 'ユーザー傾向分析',
-          'created_at': DateTime.now().toIso8601String(),
-        }),
+      // 分析結果を取得
+      final response = await _client.get(
+        Uri.parse('$baseUrl/api/v1/profiles/$userId/analysis'),
+        headers: _headers,
       );
-
-      print('ユーザー傾向レスポンス: ${utf8.decode(response.bodyBytes)}');
 
       if (response.statusCode != 200) {
         throw ReflectionException(
@@ -105,32 +131,49 @@ class ReflectionService {
       }
 
       final responseText = utf8.decode(response.bodyBytes);
-      print('APIレスポンス: $responseText');
+      print('プロファイル分析レスポンス: $responseText');
       
       final data = jsonDecode(responseText);
-      if (data is String) {
-        // 文字列の場合はパターンとして解釈
-        return [
-          {
-            'label': 'システム分析',
-            'description': data,
-            'confidence': 1.0
-          }
-        ];
+      if (data == null) {
+        return {
+          'patterns': [],
+          'labels': [],
+          'clusters': [],
+          'error': 'プロファイルが見つかりません'
+        };
       }
-      
-      final patterns = data['patterns'];
-      if (patterns == null) {
-        return [];
-      }
-      
-      return List<Map<String, dynamic>>.from(patterns);
+
+      // パターン、ラベル、クラスターを含む完全なレスポンスを返す
+      return {
+        'patterns': (data['patterns'] as List? ?? []).map((p) => {
+          'pattern': p['pattern'],
+          'category': p['category'],
+          'confidence': p['confidence'],
+          'detected_at': p['detected_at'],
+          'context': p['context'] ?? []
+        }).toList(),
+        'labels': (data['labels'] as List? ?? []).map((l) => {
+          'text': l['text'],
+          'confidence': l['confidence'] ?? 1.0,
+          'context': l['context'] ?? []
+        }).toList(),
+        'clusters': (data['clusters'] as List? ?? []).map((c) => {
+          'cluster_id': c['cluster_id'],
+          'theme': c['theme'],
+          'labels': c['labels'] ?? [],
+          'strength': c['strength'] ?? 1.0
+        }).toList(),
+        'error_occurred': data['error_occurred'] ?? false,
+        'error_message': data['error_message'],
+        'timestamp': data['timestamp']
+      };
     } catch (e) {
       if (e is ReflectionException) rethrow;
       throw ReflectionException('ユーザー傾向の取得中にエラーが発生しました: $e');
     }
   }
 
+  /// 振り返りメモの取得
   Future<String> getReflectionMemo(String threadId) async {
     try {
       final response = await _client.get(

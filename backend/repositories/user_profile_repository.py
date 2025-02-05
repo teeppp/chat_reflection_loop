@@ -45,7 +45,8 @@ class UserProfileRepository:
     async def get_profile(self, user_id: str) -> Optional[UserProfile]:
         """プロファイルを取得"""
         try:
-            doc = self._profiles_ref.document(user_id).get()
+            logger.info(f"プロファイル取得開始: {user_id}")
+            doc = self._profiles_ref.document(user_id).get()  # awaitは不要（同期メソッド）
             if not doc.exists:
                 # プロファイルが存在しない場合は新規作成
                 new_profile = UserProfile(
@@ -57,14 +58,47 @@ class UserProfileRepository:
                     base_instructions=[],
                     updated_at=datetime.utcnow()
                 )
-                self._profiles_ref.document(user_id).set(self._to_dict(new_profile))
+                logger.info(f"新規プロファイル作成: {user_id}")
+                self._profiles_ref.document(user_id).set(self._to_dict(new_profile))  # awaitは不要（同期メソッド）
+                logger.info(f"新規プロファイル保存完了: {user_id}, パターン数: 0")
                 return new_profile
             
             # 既存のプロファイルを取得
             profile_data = doc.to_dict()
-            # user_idを追加
-            profile_data['user_id'] = user_id
-            return self._from_dict(profile_data, UserProfile)
+            
+            # パターンデータを正規化
+            patterns = profile_data.get('patterns', [])
+            normalized_patterns = []
+            for p in patterns:
+                try:
+                    normalized_pattern = {
+                        "pattern": p.get('pattern', ''),
+                        "category": p.get('category', 'behavioral'),
+                        "confidence": float(p.get('confidence', 0.5)),
+                        "context": p.get('context', []),
+                        "detected_at": p.get('detected_at', datetime.utcnow()),
+                        "detection_method": p.get('detection_method', 'analysis'),
+                        "examples": p.get('examples', [])
+                    }
+                    normalized_patterns.append(normalized_pattern)
+                except Exception as e:
+                    logger.error(f"パターン正規化エラー: {str(e)}")
+                    continue
+
+            # プロファイルデータを構築
+            normalized_data = {
+                "user_id": user_id,
+                "patterns": normalized_patterns,
+                "labels": profile_data.get('labels', []),
+                "clusters": profile_data.get('clusters', []),
+                "categories": profile_data.get('categories', []),
+                "base_instructions": profile_data.get('base_instructions', []),
+                "personalized_instructions": profile_data.get('personalized_instructions'),
+                "updated_at": profile_data.get('updated_at', datetime.utcnow())
+            }
+
+            logger.info(f"正規化されたプロファイルデータ: パターン数={len(normalized_patterns)}")
+            return self._from_dict(normalized_data, UserProfile)
         except Exception as e:
             logger.error(f"Error getting profile for user {user_id}: {str(e)}")
             return None
@@ -72,50 +106,82 @@ class UserProfileRepository:
     async def add_pattern(self, user_id: str, pattern: UserPattern) -> None:
         """パターンを追加"""
         try:
+            logger.info(f"パターン追加開始: {user_id}, パターン: {pattern.pattern}")
             # プロファイルドキュメントを更新
             profile_ref = self._profiles_ref.document(user_id)
             
             # トランザクションで更新
             @firestore.transactional
             def update_in_transaction(transaction, prof_ref):
-                prof_doc = prof_ref.get(transaction=transaction)
+                logger.info(f"トランザクション開始: {user_id}")
+                prof_doc = prof_ref.get(transaction=transaction)  # awaitは不要（同期メソッド）
                 if not prof_doc.exists:
-                    # 新規プロファイル作成
+                    # 新規プロファイル作成（パターンをUserPattern形式で追加）
                     new_profile = UserProfile(
                         user_id=user_id,
-                        patterns=[pattern],
+                        patterns=[{
+                            "pattern": pattern.pattern,
+                            "category": pattern.category,
+                            "confidence": pattern.confidence,
+                            "last_updated": pattern.last_updated,
+                            "examples": pattern.examples,
+                            "detected_at": datetime.utcnow(),
+                            "detection_method": "analysis",
+                            "context": pattern.examples
+                        }],
                         labels=[],
                         clusters=[],
                         categories=[],
                         base_instructions=[],
                         updated_at=datetime.utcnow()
                     )
+                    logger.info(f"新規プロファイル作成: {user_id}, パターン: {pattern.pattern}")
                     transaction.set(prof_ref, self._to_dict(new_profile))
                 else:
                     # 既存パターンを更新または追加
                     profile_data = prof_doc.to_dict()
                     patterns = profile_data.get('patterns', [])
                     pattern_exists = False
+                    now = datetime.utcnow()
+                    
+                    # パターン情報を整形
+                    pattern_dict = {
+                        "pattern": pattern.pattern,
+                        "category": pattern.category,
+                        "confidence": pattern.confidence,
+                        "last_updated": pattern.last_updated,
+                        "examples": pattern.examples,
+                        "detected_at": now,
+                        "detection_method": "analysis",
+                        "context": pattern.examples or []
+                    }
                     
                     for i, p in enumerate(patterns):
-                        if p['pattern'] == pattern.pattern:
-                            patterns[i] = self._to_dict(pattern)
+                        if p.get('pattern') == pattern.pattern:
+                            # 既存パターンを更新
+                            patterns[i] = pattern_dict
                             pattern_exists = True
+                            logger.info(f"既存パターンを更新: {pattern.pattern}")
                             break
                     
                     if not pattern_exists:
-                        patterns.append(self._to_dict(pattern))
+                        # 新規パターンを追加
+                        patterns.append(pattern_dict)
+                        logger.info(f"新規パターンを追加: {pattern.pattern}")
                     
                     transaction.update(prof_ref, {
                         'patterns': patterns,
-                        'updated_at': datetime.utcnow()
+                        'updated_at': now
                     })
 
             # トランザクションを実行
+            logger.info(f"トランザクション実行開始: {user_id}")
             transaction = self.db.transaction()
-            update_in_transaction(transaction, profile_ref)
+            update_in_transaction(transaction, profile_ref)  # awaitは不要（同期メソッド）
+            logger.info(f"トランザクション完了: {user_id}")
             
             # パターン履歴に追加
+            logger.info(f"パターン履歴追加開始: {pattern.pattern}")
             self._patterns_ref.document(user_id).collection('patterns').add({
                 'pattern': pattern.pattern,
                 'category': pattern.category,

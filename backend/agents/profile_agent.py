@@ -4,10 +4,11 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 import json
 import logging
+import traceback
 
 from pydantic_ai.agent import Agent
 from pydantic_ai.agent import RunContext
-from pydantic_ai.models.vertexai import VertexAIModel  # 修正: vertex_ai → vertexai
+from pydantic_ai.models.vertexai import VertexAIModel
 import google.auth
 
 from agents.pattern_analysis_engine import PatternAnalysisEngine
@@ -18,7 +19,7 @@ from agents.models import (
     DynamicCategory,
     DynamicPatternEngine,
     PatternAnalysisResult,
-    ProfileInsightResult  # ProfileInsightResultをmodelsから直接インポート
+    ProfileInsightResult
 )
 
 from repositories.user_profile_repository import (
@@ -37,9 +38,14 @@ class ProfileUpdateRequest(BaseModel):
     labels: Optional[List[DynamicLabel]] = None
     categories: Optional[List[DynamicCategory]] = None
 
+class LastAnalysis(BaseModel):
+    """最後の分析情報"""
+    timestamp: datetime
+    content_hash: str
+    result: PatternAnalysisResult
+
 class ProfileAgent:
     """ユーザープロファイル管理エージェント"""
-
     def __init__(self, repository: UserProfileRepository):
         self.repository = repository
         credentials, project = google.auth.default()
@@ -56,49 +62,144 @@ class ProfileAgent:
                 label_similarity_threshold=0.6
             )
         )
+        
+        # 最後の分析情報を保持
+        self._last_analysis: Dict[str, LastAnalysis] = {}
 
-        # プロファイル分析ツールを設定
-        @self.insight_agent.tool()
-        async def analyze_profile_insights(
-            ctx: RunContext[ProfileInsightResult]
-        ) -> ProfileInsightResult:
-            """プロファイルから主要な特徴を分析"""
-            ctx.add_system_message("""
-            あなたはユーザーのプロファイルから重要な特徴とパターンを分析する専門家です。
-            ラベルとクラスター情報から、ユーザーの主要な特徴を抽出し、その理由を説明してください。
-            回答は具体的で、ユーザーの行動パターンに基づいた分析を含める必要があります。
-            """)
-            result = await ctx.model.run_model(ctx.messages)
-            return ProfileInsightResult.model_validate_json(result.data)
+    def _generate_content_hash(self, content: str) -> str:
+        """コンテンツのハッシュを生成"""
+        import hashlib
+        return hashlib.sha256(content.encode()).hexdigest()
 
     def _convert_to_user_pattern(self, pattern: Pattern) -> UserPattern:
-        """PatternをUserPatternに変換"""
-        return UserPattern(
-            pattern=pattern.pattern,
-            category=pattern.category,
-            confidence=pattern.confidence,
-            last_updated=pattern.detected_at,
-            examples=pattern.context
-        )
+        """PatternをUserPatternに変換（バリデーション付き）"""
+        try:
+            # コンテキストデータの取得
+            context_data = []
+            if hasattr(pattern, 'context') and pattern.context:
+                context_data = pattern.context
+            elif hasattr(pattern, 'examples') and pattern.examples:
+                context_data = pattern.examples
+
+            return UserPattern(
+                pattern=pattern.pattern,
+                category=pattern.category or "behavioral",
+                confidence=pattern.confidence or 0.5,
+                last_updated=pattern.detected_at or datetime.utcnow(),
+                examples=context_data
+            )
+        except Exception as e:
+            logger.error(f"Pattern conversion error: {str(e)}, pattern: {pattern}")
+            logger.info("デフォルト値でパターンを作成します")
+            # デフォルト値で作成
+            return UserPattern(
+                pattern=pattern.pattern,
+                category="behavioral",
+                confidence=0.5,
+                last_updated=datetime.utcnow(),
+                examples=[]
+            )
 
     async def analyze_reflection(
         self,
         user_id: str,
         reflection_content: str
     ) -> PatternAnalysisResult:
-        """振り返りからパターンを分析"""
+        """振り返りからパターンを分析（差分チェック付き）"""
         try:
+            if not reflection_content.strip():
+                return PatternAnalysisResult(patterns=[], error_occurred=True, error_message="空の内容です")
+
+            # コンテンツのハッシュを計算
+            content_hash = self._generate_content_hash(reflection_content)
+            
+            # 前回の分析結果をチェック
+            last = self._last_analysis.get(user_id)
+            if last and last.content_hash == content_hash:
+                logger.info("キャッシュされた分析結果を使用")
+                return last.result
+
             # 動的パターン分析を実行
             analysis_result = await self.pattern_engine.analyze_pattern(reflection_content)
             
             if analysis_result.error_occurred:
                 logger.warning(f"Pattern analysis error: {analysis_result.error_message}")
                 return analysis_result
+
+            timestamp = datetime.utcnow()  # タイムスタンプを定義
             
-            # プロファイルを更新
-            await self._update_profile_with_analysis(user_id, analysis_result)
+            # パターンを整形
+            patterns = []
+            logger.info(f"検出されたパターン: {len(analysis_result.patterns)}")
+            if analysis_result.patterns:
+                for p in analysis_result.patterns:
+                    if not p.pattern:  # 空のパターンは除外
+                        continue
+                    try:
+                        # Patternモデルに変換（必須フィールドを設定）
+                        pattern = Pattern(
+                            pattern=p.pattern,
+                            category=p.category or "behavioral",
+                            confidence=p.confidence,
+                            context=p.context or [reflection_content[:200]],  # デフォルトコンテキスト
+                            detected_at=timestamp,
+                            detection_method="llm_analysis"
+                        )
+                        patterns.append(pattern)
+                        logger.info(f"パターン変換: {pattern.pattern}")
+                    except Exception as pattern_error:
+                        logger.error(f"パターン変換エラー: {str(pattern_error)}")
+                        continue
+
+            # 検出されたラベルを追加
+            labels = []
+            if analysis_result.labels:
+                logger.info(f"検出されたラベル: {len(analysis_result.labels)}")
+                for label in analysis_result.labels:
+                    try:
+                        if not label.text:  # 空のラベルをスキップ
+                            continue
+                        dynamic_label = DynamicLabel(
+                            text=label.text,
+                            confidence=label.confidence,
+                            context=[reflection_content[:200]]  # デフォルトコンテキスト
+                        )
+                        labels.append(dynamic_label)
+                    except Exception as label_error:
+                        logger.error(f"ラベル変換エラー: {str(label_error)}")
+                        continue
+
+            # 結果を組み合わせて返す
+            analysis_result = PatternAnalysisResult(
+                patterns=patterns,
+                labels=labels,
+                clusters=[],  # クラスターは後で生成
+                error_occurred=False,
+                timestamp=timestamp  # タイムスタンプを設定
+            )
             
-            return analysis_result
+            try:
+                # プロファイルを更新
+                await self._update_profile_with_analysis(user_id, analysis_result)
+                logger.info(f"プロファイル更新完了: {user_id}")
+                
+                # 分析結果を保存
+                self._last_analysis[user_id] = LastAnalysis(
+                    timestamp=timestamp,
+                    content_hash=content_hash,
+                    result=analysis_result
+                )
+                logger.info("分析結果をキャッシュに保存")
+                
+                return analysis_result
+                
+            except Exception as e:
+                logger.error(f"Error updating profile: {str(e)}")
+                return PatternAnalysisResult(
+                    patterns=[],
+                    error_occurred=True,
+                    error_message=f"プロファイルの更新中にエラーが発生しました: {str(e)}"
+                )
             
         except Exception as e:
             logger.error(f"Error in analyze_reflection: {str(e)}")
@@ -115,92 +216,109 @@ class ProfileAgent:
     ) -> None:
         """分析結果でプロファイルを更新"""
         try:
+            logger.info(f"プロファイル更新開始: ユーザー={user_id}")
+            success_count = {"patterns": 0, "labels": 0, "clusters": 0}
+            error_count = {"patterns": 0, "labels": 0, "clusters": 0}
+
             # パターンを更新
             for pattern in analysis.patterns:
-                user_pattern = self._convert_to_user_pattern(pattern)
-                await self.repository.add_pattern(user_id, user_pattern)
+                try:
+                    user_pattern = self._convert_to_user_pattern(pattern)
+                    await self.repository.add_pattern(user_id, user_pattern)
+                    success_count["patterns"] += 1
+                    logger.info(f"パターン保存成功: {pattern.pattern}")
+                except Exception as e:
+                    error_count["patterns"] += 1
+                    logger.error(f"パターン保存エラー: {str(e)}, パターン: {pattern.pattern}")
+                    continue
             
             # ラベルを更新
             for label in analysis.labels:
-                await self.repository.add_label(user_id, label)
+                try:
+                    if not label.text:
+                        continue
+                    await self.repository.add_label(user_id, label)
+                    success_count["labels"] += 1
+                    logger.info(f"ラベル保存成功: {label.text}")
+                except Exception as e:
+                    error_count["labels"] += 1
+                    logger.error(f"ラベル保存エラー: {str(e)}, ラベル: {label.text}")
+                    continue
             
             # クラスターを更新
             for cluster in analysis.clusters:
-                await self.repository.update_cluster(user_id, cluster)
-            
-            # プロファイルの分析を実行
-            insights = await self._analyze_profile_insights(user_id)
-            if insights:
-                await self.repository.update_profile_insights(user_id, insights)
+                try:
+                    if not cluster.labels:
+                        continue
+                    await self.repository.update_cluster(user_id, cluster)
+                    success_count["clusters"] += 1
+                    logger.info(f"クラスター保存成功: {cluster.theme}")
+                except Exception as e:
+                    error_count["clusters"] += 1
+                    logger.error(f"クラスター保存エラー: {str(e)}, クラスター: {cluster.theme}")
+                    continue
+
+            logger.info(f"プロファイル更新完了 - 成功数: {success_count}, エラー数: {error_count}")
                 
         except Exception as e:
-            logger.error(f"Error updating profile: {str(e)}")
+            logger.error(f"プロファイル更新中の重大なエラー: {str(e)}")
+            raise
 
-    async def _analyze_profile_insights(
+    async def get_profile_analysis(
         self,
         user_id: str
-    ) -> Optional[ProfileInsightResult]:
-        """プロファイルの主要な特徴を分析"""
+    ) -> Optional[PatternAnalysisResult]:
+        """保存された分析結果を取得"""
         try:
+            logger.info(f"プロファイル分析結果の取得開始: {user_id}")
+            
             profile = await self.repository.get_profile(user_id)
             if not profile:
+                logger.warning(f"プロファイルが見つかりません: {user_id}")
                 return None
 
-            # プロファイル情報を文字列化
-            profile_info = {
-                "labels": [label.text for label in profile.labels],
-                "clusters": [
-                    {"theme": c.theme, "labels": c.labels}
-                    for c in profile.clusters
-                ],
-                "patterns": [p.pattern for p in profile.patterns]
-            }
-            
-            result = await self.insight_agent.run(
-                f"""
-                あなたは、ユーザーの行動パターンや特徴を深く分析する専門家です。
-                以下のプロファイル情報から、この人独自の特徴やパターンを抽出し、洞察を提供してください。
+            logger.info(f"プロファイル取得成功: パターン数={len(profile.patterns)}, "
+                       f"ラベル数={len(profile.labels)}, "
+                       f"クラスター数={len(profile.clusters)}")
 
-                現在のプロファイル情報：
-                {json.dumps(profile_info, indent=2, ensure_ascii=False)}
+            # パターンの詳細をログ出力
+            for i, p in enumerate(profile.patterns):
+                logger.info(f"パターン {i + 1}: {p.pattern} "
+                          f"(カテゴリ={p.category}, 確信度={p.confidence})")
 
-                分析の際の重要なポイント：
-                1. 表面的な分類ではなく、ユーザー固有の行動や思考のパターンを見つけ出す
-                2. ラベル間の関連性から、より深い洞察を導き出す
-                3. 時間の経過による変化や一貫性のあるパターンを識別する
-                4. 特に以下の観点での分析を重視：
-                   - 問題解決アプローチの特徴
-                   - 学習・理解の好みのパターン
-                   - コミュニケーションスタイルの独自性
-                   - 意思決定プロセスの特徴
-                   - モチベーションの源泉
+            # プロファイルからパターンを変換
+            patterns = []
+            for p in profile.patterns:
+                try:
+                    pattern = Pattern(
+                        pattern=p.pattern,
+                        category=p.category,
+                        confidence=p.confidence,
+                        detected_at=datetime.utcnow(),  # 現在時刻を使用
+                        detection_method="analysis",
+                        context=p.context or p.examples or [] # contextまたはexamplesを使用
+                    )
+                    patterns.append(pattern)
+                    logger.info(f"パターン読み込み成功: {pattern.pattern}")
+                except Exception as e:
+                    logger.error(f"パターン変換エラー: {str(e)}")
+                    continue
 
-                以下の形式でJSONを出力してください：
-                {{
-                    "primary_labels": [
-                        "最も特徴的なラベル（ユーザー固有の表現で）",
-                        "次に特徴的なラベル"
-                    ],
-                    "clusters": [
-                        {{
-                            "theme": "発見されたパターンの本質",
-                            "labels": [
-                                "関連する具体的な行動や特徴",
-                                "それを裏付ける別の特徴"
-                            ]
-                        }}
-                    ],
-                    "confidence": 0.0-1.0,
-                    "reasoning": "なぜそのような特徴が見られるのか、どのような文脈で現れているのかの詳細な説明"
-                }}
-                """,
-                deps=True
+            # 結果を作成
+            result = PatternAnalysisResult(
+                patterns=patterns,
+                labels=profile.labels or [],
+                clusters=profile.clusters or [],
+                error_occurred=False,
+                timestamp=datetime.utcnow()
             )
 
-            return result.data
+            logger.info("分析結果の変換が完了しました")
+            return result
 
         except Exception as e:
-            logger.error(f"Error in profile insights analysis: {str(e)}")
+            logger.error(f"Error in get_profile_analysis: {str(e)}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             return None
 
     async def update_profile(self, user_id: str, request: ProfileUpdateRequest) -> None:
@@ -226,96 +344,6 @@ class ProfileAgent:
             for category in request.categories:
                 await self.repository.add_category(user_id, category)
 
-    async def generate_personalized_instructions(
-        self,
-        user_id: str,
-        context: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
-        """ユーザー固有の指示を生成"""
-        try:
-            profile = await self.repository.get_profile(user_id)
-            if not profile:
-                return None
-
-            # プロファイル情報を収集
-            profile_info = {
-                "labels": [label.text for label in profile.labels],
-                "clusters": [
-                    {"theme": c.theme, "labels": c.labels}
-                    for c in profile.clusters
-                ],
-                "patterns": [p.pattern for p in profile.patterns]
-            }
-            
-            if context:
-                profile_info["context"] = context
-
-            # LLMに指示を生成させる
-            result = await self.instruction_agent.run(
-                f"""
-                以下のユーザープロファイル情報に基づいて、
-                ユーザーに合わせた具体的な指示を生成してください：
-
-                {json.dumps(profile_info, indent=2, ensure_ascii=False)}
-
-                以下の点を考慮してください：
-                1. ユーザーの主要なラベルとパターン
-                2. クラスター分析から見られる傾向
-                3. コンテキスト情報（提供されている場合）
-
-                出力形式：
-                [
-                    "具体的な指示1",
-                    "具体的な指示2",
-                    "具体的な指示3"
-                ]
-                """,
-                deps=True
-            )
-
-            try:
-                instructions = json.loads(result.data)
-                if isinstance(instructions, list):
-                    final_instructions = "\n".join(instructions)
-                    await self.repository.update_personalized_instructions(
-                        user_id,
-                        final_instructions
-                    )
-                    return final_instructions
-            except json.JSONDecodeError:
-                logger.error("Failed to parse generated instructions")
-                return None
-
-        except Exception as e:
-            logger.error(f"Error in generate_personalized_instructions: {str(e)}")
-            return None
-
-    async def update_from_reflection(
-        self,
-        user_id: str,
-        reflection_content: str
-    ) -> PatternAnalysisResult:
-        """振り返りからプロファイルを更新"""
-        try:
-            # パターンを分析
-            analysis_result = await self.analyze_reflection(user_id, reflection_content)
-            
-            # プロファイルを更新
-            await self._update_profile_with_analysis(user_id, analysis_result)
-            
-            # 指示を更新
-            instructions = await self.generate_personalized_instructions(user_id)
-            if instructions:
-                await self.repository.update_personalized_instructions(
-                    user_id,
-                    instructions
-                )
-
-            return analysis_result
-        except Exception as e:
-            logger.error(f"Error in update_from_reflection: {str(e)}")
-            return PatternAnalysisResult(
-                patterns=[],
-                error_occurred=True,
-                error_message=str(e)
-            )
+        # 最後の分析情報をクリア
+        if user_id in self._last_analysis:
+            del self._last_analysis[user_id]

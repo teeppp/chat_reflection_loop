@@ -401,97 +401,134 @@ async def analyze_user_reflection(
     reflection: ReflectionDocument,
     token: dict = Depends(verify_firebase_token)
 ):
-    """ユーザーの全振り返りノートからパターンを分析"""
+    """振り返りノートを分析してプロファイルを更新"""
     if token["uid"] != user_id:
         raise HTTPException(status_code=403, detail="Not authorized to access this profile")
 
     try:
-        # Firestoreから振り返りノートを取得（user_idのみでフィルタリング）
-        print(f"Fetching reflections for user: {user_id}")
-        docs = db.collection("chat_histories")\
-            .where("user_id", "==", user_id)\
-            .stream()
-
-        reflection_contents = []
-        for doc in docs:
-            data = doc.to_dict()
-            # Pythonでreflectionフィールドの存在チェック
-            if data.get("reflection") and data["reflection"].get("content"):
-                content = data["reflection"]["content"]
-                print(f"Found reflection: {content[:100]}...")  # 最初の100文字をログ
-                reflection_contents.append(content)
-
-        if not reflection_contents:
-            print("No reflection notes found for analysis")
-            return {"patterns": []}
-
-        all_patterns = []
-        for content in reflection_contents:
-            print(f"Analyzing reflection... {len(content)} characters")
-            analysis_result = await profile_agent.analyze_reflection(user_id, content)
-            patterns = analysis_result.patterns  # PatternAnalysisResultからpatternsを取得
-            print(f"Found patterns in categories: {set(p.category for p in patterns)}")
-            for p in patterns:
-                print(f"  - {p.category}: {p.pattern} ({p.confidence})")
-            all_patterns.extend(patterns)
+        # プロファイル更新用の分析を実行
+        analysis_result = await profile_agent.analyze_reflection(user_id, reflection.content)
         
+        # 分析結果を返す（パターンのみ）
+        return {
+            "patterns": [p.dict() for p in analysis_result.patterns]
+        }
+    except Exception as e:
+        print("Error in analyze_reflection:", str(e))
+        print("Traceback:", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+# プロファイル分析結果取得用エンドポイント
+class AnalyzeRequest(BaseModel):
+    content: Optional[str] = None
+    force_update: bool = False
+
+@app.post("/api/v1/profiles/{user_id}/analyze")
+async def analyze_user_patterns(
+    user_id: str,
+    request: AnalyzeRequest,
+    token: dict = Depends(verify_firebase_token)
+):
+    """全振り返りノートの分析を実行して保存"""
+    if token["uid"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
+
+    try:
+        print(f"分析を開始: {user_id}")
+        
+        # 単一の振り返り内容がある場合はそれを分析
+        if request.content:
+            print("単一の振り返り内容を分析")
+            result = await profile_agent.analyze_reflection(user_id, request.content)
+            await profile_agent._update_profile_with_analysis(user_id, result)
+            analyzed_count = 1
+        
+        # force_updateまたは振り返り内容が指定されていない場合は全履歴を分析
+        elif request.force_update:
+            print("全ての振り返りノートを分析")
+            docs = db.collection("chat_histories")\
+                .where("user_id", "==", user_id)\
+                .stream()
+            
+            docs_list = list(docs)
+            print(f"取得した振り返りノート数: {len(docs_list)}")
+
+            analysis_tasks = []
+            for doc in docs_list:
+                data = doc.to_dict()
+                if data.get("reflection") and data["reflection"].get("content"):
+                    content = data["reflection"]["content"]
+                    print(f"振り返りの内容: {content[:100]}...")  # 最初の100文字のみ表示
+                    task = profile_agent.analyze_reflection(user_id, content)
+                    analysis_tasks.append(task)
+
+            print(f"分析タスク数: {len(analysis_tasks)}")
+            if analysis_tasks:
+                results = await asyncio.gather(*analysis_tasks)
+                print(f"分析結果数: {len(results)}")
+                # 各分析結果をプロファイルに反映
+                for i, result in enumerate(results):
+                    print(f"分析結果 {i + 1}: パターン数 = {len(result.patterns)}")
+                    await profile_agent._update_profile_with_analysis(user_id, result)
+                analyzed_count = len(analysis_tasks)
+            else:
+                analyzed_count = 0
+        else:
+            print("分析をスキップ（振り返り内容なし、force_update=false）")
+            analyzed_count = 0
+
+        return {
+            "status": "success",
+            "message": "分析が完了しました",
+            "analyzed_count": analyzed_count
+        }
+    except Exception as e:
+        logger.error(f"Error in analyze_user_reflections: {str(e)}")
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/profiles/{user_id}/analysis")
+async def get_profile_analysis(
+    user_id: str,
+    token: dict = Depends(verify_firebase_token)
+):
+    """保存された分析結果を取得"""
+    if token["uid"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
+
+    try:
+        # 保存された分析結果を取得
+        result = await profile_agent.get_profile_analysis(user_id)
+        if not result:
+            return {"patterns": [], "labels": [], "clusters": [], "categorized": {}}
+
         # カテゴリごとにパターンをグループ化
         categorized_patterns = {}
-        for pattern in all_patterns:
-            if pattern.category not in categorized_patterns:
-                categorized_patterns[pattern.category] = []
-            categorized_patterns[pattern.category].append(pattern)
-        
+        for pattern in result.patterns:
+            if pattern.pattern:  # 空のパターンは除外
+                if pattern.category not in categorized_patterns:
+                    categorized_patterns[pattern.category] = []
+                categorized_patterns[pattern.category].append(pattern)
+
         # 各カテゴリ内で確信度でソート
-        for category in categorized_patterns:
-            categorized_patterns[category].sort(key=lambda p: p.confidence, reverse=True)
-        
+        for patterns in categorized_patterns.values():
+            patterns.sort(key=lambda p: p.confidence, reverse=True)
+
         return {
-            "patterns": [p.dict() for p in all_patterns],
+            "patterns": [p.dict() for p in result.patterns if p.pattern],
+            "labels": [{"text": label.text} for label in result.labels],
+            "clusters": [c.dict() for c in result.clusters],
             "categorized": {
                 category: [p.dict() for p in patterns]
                 for category, patterns in categorized_patterns.items()
             }
         }
     except Exception as e:
-        print("Error in analyze_user_reflection:", str(e))
+        print("Error in get_profile_analysis:", str(e))
         print("Traceback:", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/api/v1/profiles/{user_id}/instructions/{role}")
-async def get_profile_instructions(
-    user_id: str,
-    role: str,
-    token: dict = Depends(verify_firebase_token)
-):
-    """ユーザー固有の指示を取得"""
-    if token["uid"] != user_id:
-        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
-
-    try:
-        # 有効な役割かどうかを確認
-        if role not in ProfileAgent.VALID_ROLES:
-            raise HTTPException(status_code=404, detail=f"Invalid role: {role}")
-
-        instructions = await profile_agent.generate_personalized_instructions(user_id, role)
-        if instructions is None:
-            # プロファイルが存在しない場合は404を返す
-            raise HTTPException(
-                status_code=404,
-                detail="Profile not found or instructions not available for this role"
-            )
-        return {"instructions": instructions}
-    except HTTPException:
-        raise
-    except Exception as e:
-        print("Error in get_profile_instructions:", str(e))
-        print("Traceback:", traceback.format_exc())
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to get profile instructions: {str(e)}"
-        )
-
-
+# 既存のエンドポイントを更新（キャッシュを活用）
 @app.post("/api/v1/reflections/generate")
 async def generate_reflection(
     request: GenerateReflectionRequest,
@@ -499,9 +536,9 @@ async def generate_reflection(
 ):
     """チャットセッションから振り返りメモを生成"""
     try:
-        print("Debug - Starting reflection generation")  # デバッグログ追加
+        print("Debug - Starting reflection generation")
         
-        # セッションの存在確認
+        # セッションの存在確認と権限チェック
         doc_ref = db.collection("chat_histories").document(request.session_id)
         doc = doc_ref.get()
         if not doc.exists:
@@ -511,7 +548,7 @@ async def generate_reflection(
         if chat_data["user_id"] != token["uid"]:
             raise HTTPException(status_code=403, detail="Not authorized to access this chat session")
 
-        # チャット履歴をReflectionChatMessage形式に変換
+        # チャット履歴を変換
         chat_history = [
             ReflectionChatMessage(
                 role=msg["role"],
@@ -519,45 +556,37 @@ async def generate_reflection(
             ) for msg in chat_data["messages"]
         ]
 
-        print("Debug - Chat History:", chat_history)  # デバッグログ追加
-
-        # 振り返りメモの生成
+        # 振り返りメモを生成
         reflection = await reflection_generator.generate_reflection(chat_history)
-        
-        print("Debug - Generated Reflection:", reflection)  # デバッグログ追加
-
-        # セッションIDとユーザーIDを設定
         reflection.session_id = request.session_id
         reflection.user_id = token["uid"]
-
-        # 振り返り情報をチャット履歴に追加
         reflection_dict = reflection.to_dict()
-        print("Debug - Reflection Dict:", reflection_dict)  # デバッグログ追加
 
-        # プロファイルの更新を試みる
-        try:
-            patterns = await profile_agent.update_from_reflection(token["uid"], reflection.content)
-            print("Debug - Updated Patterns:", [p.dict() for p in patterns])  # デバッグログ追加
-        except Exception as profile_error:
-            print("Warning - Profile update failed:", str(profile_error))
-            print("Traceback:", traceback.format_exc())
-            patterns = []
+        # 振り返りを分析
+        analysis_result = await profile_agent.analyze_reflection(
+            token["uid"],
+            reflection.content
+        )
 
-        doc_ref.update({
-            "reflection": reflection_dict
-        })
+        # 振り返り情報とタイムスタンプを更新
+        update_data = {
+            "reflection": reflection_dict,
+            "updated_at": datetime.utcnow()
+        }
+        await doc_ref.update(update_data)
 
-        # 振り返りと更新されたパターンを返す
         return {
             "reflection": reflection_dict,
-            "patterns": [p.dict() for p in patterns]
+            "patterns": [p.dict() for p in analysis_result.patterns],
+            "updated_at": update_data["updated_at"]
         }
 
     except Exception as e:
-        print("Error in generate_reflection:", str(e))  # エラーログ追加
-        print("Traceback:", traceback.format_exc())  # スタックトレース追加
+        print("Error in generate_reflection:", str(e))
+        print("Traceback:", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
+# 振り返り取得用エンドポイント
 @app.get("/api/v1/reflections/session/{session_id}")
 async def get_session_reflection(
     session_id: str,
@@ -580,8 +609,52 @@ async def get_session_reflection(
         return {"reflection": chat_data["reflection"]}
 
     except Exception as e:
-        print("Error in get_session_reflection:", str(e))  # エラーログ追加
-        print("Traceback:", traceback.format_exc())  # スタックトレース追加
+        print("Error in get_session_reflection:", str(e))
+        print("Traceback:", traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/v1/profiles/{user_id}/analyze-reflection")
+async def get_user_reflection_analysis(
+    user_id: str,
+    token: dict = Depends(verify_firebase_token)
+):
+    """ユーザーの分析結果を取得（キャッシュ活用）"""
+    if token["uid"] != user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this profile")
+
+    try:
+        # キャッシュされた分析結果を取得
+        cached_result = await profile_agent.get_cached_analysis(user_id)
+        if cached_result:
+            patterns = cached_result.patterns
+        else:
+            # キャッシュがない場合は保存されている最新の結果を返す
+            profile = await profile_repository.get_profile(user_id)
+            if not profile:
+                return {"patterns": [], "categorized": {}}
+            patterns = profile.patterns
+
+        # カテゴリごとにパターンをグループ化
+        categorized_patterns = {}
+        for pattern in patterns:
+            if pattern.category not in categorized_patterns:
+                categorized_patterns[pattern.category] = []
+            categorized_patterns[pattern.category].append(pattern)
+
+        # 各カテゴリ内で確信度でソート
+        for category in categorized_patterns:
+            categorized_patterns[category].sort(key=lambda p: p.confidence, reverse=True)
+
+        return {
+            "patterns": [p.dict() for p in patterns],
+            "categorized": {
+                category: [p.dict() for p in patterns]
+                for category, patterns in categorized_patterns.items()
+            }
+        }
+    except Exception as e:
+        print("Error in get_user_reflection_analysis:", str(e))
+        print("Traceback:", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/v1/reflections/user")
