@@ -5,10 +5,7 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 class AppConfig {
   static Future<void> load() async {
-    if (kIsWeb) {
-      // Web環境では.envファイルを使用
-      await dotenv.load(fileName: '.env');
-    } else {
+    if (!kIsWeb) {
       // モバイル環境ではJSON設定ファイルを使用
       try {
         final String configString = await rootBundle.loadString('assets/config/config_dev.json');
@@ -27,11 +24,4 @@ class AppConfig {
       }
     }
   }
-
-  static String get apiBaseUrl => dotenv.env['API_BASE_URL'] ?? '';
-  static String get firebaseApiKey => dotenv.env['FIREBASE_API_KEY'] ?? '';
-  static String get firebaseAuthDomain => dotenv.env['FIREBASE_AUTH_DOMAIN'] ?? '';
-  static String get firebaseProjectId => dotenv.env['FIREBASE_PROJECT_ID'] ?? '';
-  static String get firebaseMessagingSenderId => dotenv.env['FIREBASE_MESSAGING_SENDER_ID'] ?? '';
-  static String get firebaseAppId => dotenv.env['FIREBASE_APP_ID'] ?? '';
 }

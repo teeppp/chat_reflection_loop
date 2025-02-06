@@ -4,6 +4,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
+import 'package:js/js_util.dart' as js_util;
 import 'screens/home_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/chat_screen.dart';
@@ -21,65 +22,78 @@ void main() async {
       
       try {
         print('Loading configuration...');
-        await AppConfig.load();
-        print('Configuration loaded successfully');
-      } catch (e) {
-        print('Error loading configuration: $e');
-        rethrow;
-      }
+        // index.htmlから設定を読み込む
+        final env = js_util.getProperty(js_util.getProperty(js_util.globalThis, 'window'), 'flutterWebEnvironment');
+        
+        // デバッグ用：読み込んだ設定を確認
+        print('Loaded environment config:');
+        print('apiKey: ${js_util.getProperty(env, 'apiKey')}');
+        print('authDomain: ${js_util.getProperty(env, 'authDomain')}');
+        print('projectId: ${js_util.getProperty(env, 'projectId')}');
+        print('apiBaseUrl: ${js_util.getProperty(env, 'apiBaseUrl')}');
+        
+        try {
+          print('Initializing Firebase...');
+          await Firebase.initializeApp(
+            options: FirebaseOptions(
+              apiKey: js_util.getProperty(env, 'apiKey'),
+              authDomain: js_util.getProperty(env, 'authDomain'),
+              projectId: js_util.getProperty(env, 'projectId'),
+              storageBucket: js_util.getProperty(env, 'storageBucket'),
+              messagingSenderId: js_util.getProperty(env, 'messagingSenderId'),
+              appId: js_util.getProperty(env, 'appId'),
+              measurementId: js_util.getProperty(env, 'measurementId'),
+            ),
+          );
+          print('Firebase initialization successful');
+        } catch (e) {
+          print('Firebase initialization error: $e');
+          print('Firebase initialization stack trace:');
+          print(StackTrace.current);
+          rethrow;
+        }
 
-      try {
-        print('Initializing Firebase...');
-        await Firebase.initializeApp(
-          options: FirebaseOptions(
-            apiKey: AppConfig.firebaseApiKey,
-            authDomain: AppConfig.firebaseAuthDomain,
-            projectId: AppConfig.firebaseProjectId,
-            messagingSenderId: AppConfig.firebaseMessagingSenderId,
-            appId: AppConfig.firebaseAppId,
+        final chatService = ChatService(baseUrl: js_util.getProperty(env, 'apiBaseUrl'));
+        final reflectionService = ReflectionService(baseUrl: js_util.getProperty(env, 'apiBaseUrl'));
+
+        // Firebaseの認証状態を監視し、トークンの変更を検知
+        FirebaseAuth.instance.authStateChanges().listen((User? user) async {
+          if (user != null) {
+            try {
+              final token = await user.getIdToken();
+              reflectionService.authToken = token;
+              print('認証トークンを設定しました');
+            } catch (e) {
+              print('認証トークンの取得に失敗: $e');
+            }
+          }
+        });
+
+        runApp(
+          MultiProvider(
+            providers: [
+              Provider<ChatService>(
+                create: (_) => chatService,
+              ),
+              Provider<ReflectionService>(
+                create: (_) => reflectionService,
+              ),
+            ],
+            child: const MyApp(),
           ),
         );
-        print('Firebase initialization successful');
-      } catch (e) {
-        print('Firebase initialization error: $e');
+      } catch (e, stackTrace) {
+        print('Error loading configuration: $e');
+        print('Stack trace: $stackTrace');
         rethrow;
       }
-
-      final chatService = ChatService(baseUrl: AppConfig.apiBaseUrl);
-      final reflectionService = ReflectionService(baseUrl: AppConfig.apiBaseUrl);
-
-      // Firebaseの認証状態を監視し、トークンの変更を検知
-      FirebaseAuth.instance.authStateChanges().listen((User? user) async {
-        if (user != null) {
-          try {
-            final token = await user.getIdToken();
-            reflectionService.authToken = token;
-            print('認証トークンを設定しました');
-          } catch (e) {
-            print('認証トークンの取得に失敗: $e');
-          }
-        }
-      });
-
-      runApp(
-        MultiProvider(
-          providers: [
-            Provider<ChatService>(
-              create: (_) => chatService,
-            ),
-            Provider<ReflectionService>(
-              create: (_) => reflectionService,
-            ),
-          ],
-          child: const MyApp(),
-        ),
-      );
     }, (error, stack) {
       print('Uncaught error: $error');
       print('Stack trace: $stack');
     });
-  } catch (e) {
+  } catch (e, stackTrace) {
     print('Fatal error: $e');
+    print('Stack trace: $stackTrace');
     rethrow;
   }
 }
