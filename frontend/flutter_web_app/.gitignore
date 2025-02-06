@@ -43,3 +43,20 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Firebase設定
+.firebaserc
+firebase.json
+**/google-services.json
+
+# 環境設定
+.env.development
+.env.production
+**/assets/config/*.json
+!**/assets/config/*.sample.json
+**/node_modules/
+**/.dart_tool/
+**/.idea/
+**/.gradle/
+/web/config.js
+/android/app/src/main/assets/config.json
