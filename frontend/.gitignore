@@ -64,3 +64,4 @@ app.*.map.json
 **/.env
 **/.env.*
 !**/.env.sample
+*.cache
