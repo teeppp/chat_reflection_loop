@@ -1,0 +1,28 @@
+[project]
+name = "backend"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "aiohttp>=3.11.11",
+    "duckduckgo-search>=7.1.1",
+    "fastapi[standard]>=0.115.6",
+    "jupyter>=1.1.1",
+    "pydantic-ai[examples,logfire]>=0.0.15",
+    "sse-starlette>=2.2.1",
+    "tavily-python>=0.5.0",
+    "firebase-admin>=6.3.0",
+    "pytest>=8.3.4",
+    "pytest-asyncio>=0.25.3",
+    "httpx>=0.28.1",
+    "python-dotenv>=1.0.1",
+    "scipy>=1.12.0",
+    "scikit-learn>=1.4.0",
+    "numpy>=1.26.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+# イベントループスコープをfunction（各テスト関数）に設定
+asyncio_default_fixture_loop_scope = "function"

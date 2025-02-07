@@ -1,0 +1,86 @@
+// For format details, see https://aka.ms/devcontainer.json. For config options, see the
+// README at: https://github.com/devcontainers/templates/tree/main/src/docker-existing-docker-compose
+{
+	"name": "Existing Dockerfile",
+	"build": {
+		"dockerfile": "Dockerfile",
+		"context":	".",
+		"target": "devcontainer"
+	},
+
+
+	// Update the 'dockerComposeFile' list if you have more compose files or use different names.
+	// The .devcontainer/docker-compose.yml file contains any overrides you need/want to make.
+	// "dockerComposeFile": [
+	// 	"../compose.yml",
+	// 	"docker-compose.yml"
+	// ],
+
+	// The 'service' property is the name of the service for the container that VS Code should
+	// use. Update this value and .devcontainer/docker-compose.yml to the real service name.
+	// "service": "devenv",
+
+	// The optional 'workspaceFolder' property is the path VS Code should open by default when
+// .devcontainer/devcontainer.json
+	"workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind,consistency=cached",
+	"mounts": [
+		"type=bind,src=/var/run/docker.sock,dst=/var/run/docker.sock",
+		"type=bind,src=${localEnv:HOME}/.config,dst=/root/.config",
+		"type=bind,src=${localEnv:HOME}/.vscode-server/data/User/globalStorage,dst=/root/.vscode-server/data/User/globalStorage",
+		"type=bind,src=${localEnv:HOME}/.aws,dst=/root/.aws"
+	],
+	
+	// "postCreateCommand": "gcloud auth application-default login",
+	"workspaceFolder": "${localWorkspaceFolder}",
+	"remoteEnv": {
+		"LOCAL_WORKSPACE_FOLDER": "${localWorkspaceFolder}",
+		"HOST_HOME": "${localEnv:HOME}"
+	},
+	"initializeCommand": "docker network inspect devnet >/dev/null 2>&1 || docker network create devnet",
+	"runArgs": [
+		"--network=devnet"
+	],
+	"customizations": {
+		"vscode": {
+			"extensions": [
+				"mhutchie.git-graph",
+				"saoudrizwan.claude-dev",
+				"shd101wyy.markdown-preview-enhanced",
+				"yzhang.markdown-all-in-one",
+				"ms-toolsai.jupyter",
+				"donjayamanne.python-environment-manager",
+				"ms-python.python",
+				"ms-azuretools.vscode-docker",
+				"RooVeterinaryInc.roo-cline",
+				"GoogleCloudTools.cloudcode",
+				"Dart-Code.dart-code",
+				"Dart-Code.flutter"
+			],
+			"settings": {
+				"dart.flutterSdkPath": "/usr/local/flutter"
+			}
+		}
+	}
+
+
+	// Features to add to the dev container. More info: https://containers.dev/features.
+	// "features": {},
+
+	// Use 'forwardPorts' to make a list of ports inside the container available locally.
+	// "forwardPorts": [],
+
+	// Uncomment the next line if you want start specific services in your Docker Compose config.
+	// "runServices": [],
+
+	// Uncomment the next line if you want to keep your containers running after VS Code shuts down.
+	// "shutdownAction": "none",
+
+	// Uncomment the next line to run commands after the container is created.
+	// "postCreateCommand": "cat /etc/os-release",
+
+	// Configure tool-specific properties.
+	// "customizations": {},
+
+	// Uncomment to connect as an existing user other than the container default. More info: https://aka.ms/dev-containers-non-root.
+	// "remoteUser": "devcontainer"
+}

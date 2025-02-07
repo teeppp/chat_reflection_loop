@@ -1,12 +1,9 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-
-# C extensions
+# Deployment Manager
+*.pyc
+*.pyo
+*.pyd
+*.pyc
 *.so
-
-# Distribution / packaging
 .Python
 build/
 develop-eggs/
@@ -169,3 +166,23 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Flutter
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+/build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*.sublime-workspace
+*.sublime-project
+
+# OS
+.DS_Store
+Thumbs.db
