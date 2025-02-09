@@ -11,6 +11,7 @@ import google.auth
 from pydantic_ai.agent import Agent
 from pydantic_ai.agent import RunContext
 from pydantic_ai.models.vertexai import VertexAIModel
+import os
 
 from .models import (
     Pattern,
@@ -43,7 +44,7 @@ class PatternAnalysisEngine:
         # Initialize Vertex AI model if not provided
         if model is None:
             credentials, project = google.auth.default()
-            model = VertexAIModel('gemini-2.0-flash-exp')
+            model = VertexAIModel(os.getenv('VERTEXAI_LLM_DEPLOYMENT','gemini-2.0-pro-exp-02-05'))
         
         # Initialize agent for label generation with system prompt
         self.agent = Agent(

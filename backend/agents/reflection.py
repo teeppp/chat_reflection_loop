@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import List, Optional
 from datetime import datetime
 from pydantic_ai.models.vertexai import VertexAIModel
+import os
 
 class ReflectionDocument(BaseModel):
     """チャットセッションの振り返りメモを表すデータモデル"""
@@ -40,7 +41,7 @@ class ChatMessage(BaseModel):
 class ReflectionGenerator:
     def __init__(self):
         # Gemini-2.0-flash-expモデルを使用
-        model = VertexAIModel('gemini-2.0-flash-exp')
+        model = VertexAIModel(os.getenv('VERTEXAI_LLM_DEPLOYMENT','gemini-2.0-pro-exp-02-05'))
         self.agent = Agent(model, deps_type=bool)
         
     async def generate_reflection(self, chat_history: List[ChatMessage]) -> ReflectionDocument:

@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import List, Dict, Any, Optional
 from pydantic_ai import Agent, RunContext, ModelRetry
 from pydantic_ai.models.vertexai import VertexAIModel
+import os
 
 from .models import (
     Pattern,
@@ -21,7 +22,7 @@ class PatternAnalyzer:
     """振り返り内容からパターンを分析するエンジン"""
     
     def __init__(self):
-        model = VertexAIModel('gemini-2.0-flash-exp')
+        model = VertexAIModel(os.getenv('VERTEXAI_LLM_DEPLOYMENT','gemini-2.0-pro-exp-02-05'))
         self.agent = Agent(
             model,
             result_type=PatternAnalysisResponse,
