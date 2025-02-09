@@ -1,5 +1,4 @@
-# Google Cloud LLM Hackathons
-
+# Chat Reflection Loop
 フロントエンドにFlutter、バックエンドにFastAPI、インフラにGoogle Cloudを使用したLLMチャットアプリケーションのプロジェクトです。Firebase AuthenticationとFirestoreを活用し、セキュアで拡張性の高いアーキテクチャを実現しています。
 
 ## アーキテクチャ概要

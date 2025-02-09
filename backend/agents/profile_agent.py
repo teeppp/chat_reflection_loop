@@ -5,7 +5,7 @@ from pydantic import BaseModel
 import json
 import logging
 import traceback
-
+import os
 from pydantic_ai.agent import Agent
 from pydantic_ai.agent import RunContext
 from pydantic_ai.models.vertexai import VertexAIModel
@@ -50,7 +50,7 @@ class ProfileAgent:
     def __init__(self, repository: UserProfileRepository):
         self.repository = repository
         credentials, project = google.auth.default()
-        model = VertexAIModel('gemini-2.0-flash-exp')
+        model = VertexAIModel(os.getenv('VERTEXAI_LLM_DEPLOYMENT','gemini-2.0-pro-exp-02-05'))
         self.insight_agent = Agent(model, deps_type=bool)
         self.instruction_agent = Agent(model, deps_type=bool)
         

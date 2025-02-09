@@ -15,6 +15,7 @@ from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
 from pydantic_ai.models.vertexai import VertexAIModel
 import google.auth
+import os
 
 credentials, project = google.auth.default()
 print(credentials)
@@ -28,22 +29,16 @@ if os.getenv("LOGFIRE_TOKEN", None):
     logfire.configure(send_to_logfire='if-token-present')
 
 # %%
-# model = VertexAIModel('gemini-2.0-flash-exp')
+
 model = VertexAIModel(
-    'gemini-2.0-flash-exp'
-    # 'gemini-1.5-pro-002'
-    # 'gemini-2.0-flash-thinking-exp-1219',
-    # service_account_file=os.getenv('GOOGLE_APPLICATION_CREDENTIALS', '/app/vertex-ai-key.json')
+    os.getenv('VERTEXAI_LLM_DEPLOYMENT','gemini-2.0-pro-exp-02-05'),
 )
 # %%
 agent = Agent(
     model,
     deps_type=bool,
 )
-# agent = Agent(
-#     "openai:gpt-4o-mini",
-#     deps_type=bool,
-# )
+
 async def check_authorization(ctx: RunContext[bool], tool_def: ToolDefinition):
     if ctx.deps:
         return tool_def
@@ -108,7 +103,6 @@ async def tavily_websearch(ctx: RunContext[str]) -> str:
     
     
     return json.dumps(results, ensure_ascii=False)
-
 
 # %%
 if __name__ == "__main__":
