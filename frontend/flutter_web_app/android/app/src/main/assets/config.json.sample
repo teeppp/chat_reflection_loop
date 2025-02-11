@@ -1,0 +1,14 @@
+{
+    "firebase": {
+        "storageBucket": "your-storage-bucket",
+        "apiKey": "your-api-key",
+        "messagingSenderId": "your-messaging-sender-id",
+        "authDomain": "your-auth-domain",
+        "projectId": "your-project-id",
+        "appId": "your-app-id",
+        "measurementId": "your-measurement-id"
+    },
+    "api": {
+        "baseUrl": "your-cloudrun-endpoint"
+    }
+}
