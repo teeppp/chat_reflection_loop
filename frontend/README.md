@@ -48,12 +48,9 @@ cd flutter_web_app/scripts
 chmod +x build_web.sh
 ```
 
-### 2. 環境変数のエクスポートとデプロイの実行
+### 2. デプロイの実行
 
 ```bash
-# 環境変数をエクスポート
-export $(cat ../.env | grep -v '^#' | xargs)
-
 # ビルドとデプロイの実行
 ./build_web.sh
 ```
@@ -70,12 +67,9 @@ cd flutter_web_app/scripts
 chmod +x build_android.sh
 ```
 
-### 2. 環境変数のエクスポートとビルドの実行
+### 2. ビルドの実行
 
 ```bash
-# 環境変数をエクスポート
-export $(cat ../.env | grep -v '^#' | xargs)
-
 # Androidビルドの実行
 ./build_android.sh
 ```
@@ -87,16 +81,35 @@ build/app/outputs/flutter-apk/app-release.apk
 
 ## 設定ファイルの管理
 
-機密情報（APIキーなど）は.envファイルで管理し、Gitリポジトリにはコミットしません。
-代わりに.env.sampleを提供し、必要な環境変数の例を示しています。
+アプリケーションの設定は、Web版とAndroid版で異なる方法で管理されています：
+
+### Web版（開発環境・本番環境）
+1. 環境変数（.envファイル）
+   - 機密情報（APIキーなど）は.envファイルで管理
+   - Gitリポジトリにはコミットせず、.env.sampleで例を提供
+   - .envファイルは.gitignoreに含まれており、Gitで追跡されません
+2. 設定ファイル
+   - 各スクリプトが.envから自動的に設定ファイルを生成
+   - パス: `assets/config/config.json`
+
+### Android版
+1. 設定ファイル
+   - パス: `android/app/src/main/assets/config.json`
+   - サンプル: `android/app/src/main/assets/config.json.sample`
+   - Web版とは別の設定ファイルを使用（Firebase Consoleで異なるアプリとして登録）
+   - 直接config.jsonを編集して使用
 
 ### 開発時の注意点
 
-1. .envファイルは.gitignoreに含まれており、Gitで追跡されません
-2. 新しい環境変数を追加する場合は、.env.sampleも更新してください
-3. ローカル開発時は`serve_local.sh`を使用してください
-4. Web用デプロイ時は`build_web.sh`を使用してください
-5. Android APK作成時は`build_android.sh`を使用してください
+1. Web開発
+   - 新しい環境変数を追加する場合は、.env.sampleも更新してください
+   - ローカル開発時は`serve_local.sh`を使用（.envから設定を生成）
+   - デプロイ時は`build_web.sh`を使用（.envから設定を生成）
+
+2. Android開発
+   - config.json.sampleをコピーしてconfig.jsonを作成
+   - 必要な設定値を直接config.jsonに記述
+   - ビルド時は`build_android.sh`を使用
 
 ## トラブルシューティング
 
